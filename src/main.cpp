@@ -169,8 +169,8 @@ private:
     bool create_shaders()
     {
         // Create general shaders
-        m_mesh_vs = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
-        m_mesh_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_mesh_vs       = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
+        m_mesh_fs       = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
         m_shadow_map_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
 
         if (!m_mesh_vs || !m_mesh_fs || !m_shadow_map_fs)
@@ -231,8 +231,10 @@ private:
         program->set_uniform("u_View", view);
         program->set_uniform("u_Model", model);
         program->set_uniform("u_LightDirection", m_light_direction);
+        program->set_uniform("u_LightColor", m_light_color);
         program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
         program->set_uniform("u_Bias", m_bias);
+        program->set_uniform("u_CameraPosition", m_main_camera->m_position);
 
         // Bind vertex array.
         mesh->mesh_vertex_array()->bind();
@@ -248,17 +250,17 @@ private:
             if (material->albedo_texture() && program->set_uniform("s_Albedo", 0))
                 material->albedo_texture()->bind(0);
 
-            if (program->set_uniform("s_ShadowMap", 1))
-                m_shadow_map->texture()->bind(1);
-
-            /*if (m_mesh_program->set_uniform("u_Normal", 1))
+            if (material->normal_texture() && program->set_uniform("s_Normal", 1))
                 material->normal_texture()->bind(1);
 
-            if (m_mesh_program->set_uniform("u_Metallic", 2))
+            if (material->metallic_texture() && program->set_uniform("s_Metallic", 2))
                 material->metallic_texture()->bind(2);
 
-            if (m_mesh_program->set_uniform("u_Roughness", 3))
-                material->roughness_texture()->bind(3);*/
+            if (material->roughness_texture() && program->set_uniform("s_Roughness", 3))
+                material->roughness_texture()->bind(3);
+
+            if (program->set_uniform("s_ShadowMap", 4))
+                m_shadow_map->texture()->bind(4);
 
             // Issue draw call.
             glDrawElementsBaseVertex(GL_TRIANGLES, submesh.index_count, GL_UNSIGNED_INT, (void*)(sizeof(unsigned int) * submesh.base_index), submesh.base_vertex);
@@ -351,8 +353,9 @@ private:
 
     // Light
     glm::vec3 m_light_direction;
-    float     m_sun_angle       = 0.0f;
-    float     m_bias      = 0.01f;
+    glm::vec3 m_light_color = glm::vec3(1.0f);
+    float     m_sun_angle   = 0.0f;
+    float     m_bias        = 0.01f;
 
     // Camera controls.
     bool  m_mouse_look         = false;

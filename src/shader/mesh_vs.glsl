@@ -2,11 +2,11 @@
 // INPUT VARIABLES --------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(location = 0) in vec3 VS_IN_Position;
-layout(location = 1) in vec2 VS_IN_UV;
-layout(location = 2) in vec3 VS_IN_Normal;
-layout(location = 3) in vec3 VS_IN_Tangent;
-layout(location = 4) in vec3 VS_IN_Bitangent;
+layout(location = 0) in vec4 VS_IN_Position;
+layout(location = 1) in vec4 VS_IN_TexCoord;
+layout(location = 2) in vec4 VS_IN_Normal;
+layout(location = 3) in vec4 VS_IN_Tangent;
+layout(location = 4) in vec4 VS_IN_Bitangent;
 
 // ------------------------------------------------------------------
 // OUTPUT VARIABLES -------------------------------------------------
@@ -14,8 +14,9 @@ layout(location = 4) in vec3 VS_IN_Bitangent;
 
 out vec3 FS_IN_WorldPos;
 out vec3 FS_IN_Normal;
-out vec2 FS_IN_UV;
-out vec4 FS_IN_NDCFragPos;
+out vec2 FS_IN_TexCoord;
+out vec3 FS_IN_Tangent;
+out vec3 FS_IN_Bitangent;
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
@@ -31,13 +32,17 @@ uniform mat4 u_Model;
 
 void main()
 {
-    vec4 world_pos   = u_Model * vec4(VS_IN_Position, 1.0f);
-    FS_IN_WorldPos   = world_pos.xyz;
-    FS_IN_Normal     = normalize(normalize(mat3(u_Model) * VS_IN_Normal));
-    FS_IN_UV         = VS_IN_UV;
-    FS_IN_NDCFragPos = u_Projection * u_View * world_pos;
+    vec4 world_pos = u_Model * vec4(VS_IN_Position.xyz, 1.0f);
+    FS_IN_WorldPos = world_pos.xyz;
+    FS_IN_TexCoord = VS_IN_TexCoord.xy;
 
-    gl_Position = FS_IN_NDCFragPos;
+    mat3 normal_mat = mat3(u_Model);
+
+    FS_IN_Normal    = normalize(normal_mat * VS_IN_Normal.xyz);
+    FS_IN_Tangent   = normal_mat * VS_IN_Tangent.xyz;
+    FS_IN_Bitangent = normal_mat * VS_IN_Bitangent.xyz;
+
+    gl_Position = u_Projection * u_View * world_pos;
 }
 
 // ------------------------------------------------------------------
