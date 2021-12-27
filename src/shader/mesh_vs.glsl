@@ -21,13 +21,8 @@ out vec4 FS_IN_NDCFragPos;
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(std140, binding = 0) uniform GlobalUniforms
-{
-    mat4 view_proj;
-    vec4 cam_pos;
-    int  num_instances;
-};
-
+uniform mat4 u_View;
+uniform mat4 u_Projection;
 uniform mat4 u_Model;
 
 // ------------------------------------------------------------------
@@ -40,7 +35,7 @@ void main()
     FS_IN_WorldPos   = world_pos.xyz;
     FS_IN_Normal     = normalize(normalize(mat3(u_Model) * VS_IN_Normal));
     FS_IN_UV         = VS_IN_UV;
-    FS_IN_NDCFragPos = view_proj * world_pos;
+    FS_IN_NDCFragPos = u_Projection * u_View * world_pos;
 
     gl_Position = FS_IN_NDCFragPos;
 }

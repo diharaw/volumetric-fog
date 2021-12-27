@@ -14,15 +14,7 @@
 #include <random>
 #include <fstream>
 
-#define CAMERA_FAR_PLANE 1000.0f
-
-struct GlobalUniforms
-{
-    DW_ALIGNED(16)
-    glm::mat4 view_proj;
-    DW_ALIGNED(16)
-    glm::vec4 cam_pos;
-};
+#define CAMERA_FAR_PLANE 5000.0f
 
 class VolumetricLighting : public dw::Application
 {
@@ -34,16 +26,20 @@ protected:
         m_shadow_map = std::unique_ptr<dw::ShadowMap>(new dw::ShadowMap(2048));
         m_sky_model  = std::unique_ptr<dw::HosekWilkieSkyModel>(new dw::HosekWilkieSkyModel());
 
+        m_shadow_map->set_extents(2000.0f);
+        m_shadow_map->set_near_plane(1.0f);
+        m_shadow_map->set_far_plane(4600.0f);
+        m_shadow_map->set_backoff_distance(2677.0f);
+
+        m_sun_angle = glm::radians(-60.0f);
+
         // Create GPU resources.
         if (!create_shaders())
             return false;
 
-        if (!create_uniform_buffer())
-            return false;
-
         // Load scene.
-        //if (!load_scene())
-        //    return false;
+        if (!load_scene())
+            return false;
 
         // Create camera.
         create_camera();
@@ -61,21 +57,13 @@ protected:
         // Update camera.
         update_camera();
 
-        update_uniforms();
+        render_shadow_map();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, m_width, m_height);
-
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClearDepth(1.0);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        //render_scene();
+        render_main_camera();
 
         m_sky_model->update(-m_light_direction);
         m_sky_model->render(m_width, m_height, m_main_camera->m_view, m_main_camera->m_projection);
 
-        m_debug_draw.set_depth_test(true);
         m_debug_draw.render(nullptr, m_width, m_height, m_main_camera->m_view_projection, m_main_camera->m_position);
     }
 
@@ -83,8 +71,10 @@ protected:
 
     void debug_gui()
     {
+        ImGui::InputFloat("Bias", &m_bias);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
         m_light_direction = glm::normalize(glm::vec3(0.0f, sin(m_sun_angle), cos(m_sun_angle)));
+        m_shadow_map->set_direction(m_light_direction);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -165,7 +155,7 @@ protected:
         settings.major_ver             = 4;
         settings.width                 = 1920;
         settings.height                = 1080;
-        settings.title                 = "SDF Baking";
+        settings.title                 = "Volumetric Lighting";
         settings.enable_debug_callback = false;
 
         return settings;
@@ -181,8 +171,9 @@ private:
         // Create general shaders
         m_mesh_vs = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
         m_mesh_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_shadow_map_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
 
-        if (!m_mesh_vs || !m_mesh_fs)
+        if (!m_mesh_vs || !m_mesh_fs || !m_shadow_map_fs)
         {
             DW_LOG_FATAL("Failed to create Shaders");
             return false;
@@ -197,15 +188,14 @@ private:
             return false;
         }
 
-        return true;
-    }
+        // Create general shader program
+        m_shadow_map_program = dw::gl::Program::create({ m_mesh_vs, m_shadow_map_fs });
 
-    // -----------------------------------------------------------------------------------------------------------------------------------
-
-    bool create_uniform_buffer()
-    {
-        // Create uniform buffer for global data
-        m_global_ubo = dw::gl::Buffer::create(GL_UNIFORM_BUFFER, GL_MAP_WRITE_BIT, sizeof(GlobalUniforms));
+        if (!m_shadow_map_program)
+        {
+            DW_LOG_FATAL("Failed to create Shader Program");
+            return false;
+        }
 
         return true;
     }
@@ -235,9 +225,14 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void render_mesh(dw::Mesh::Ptr mesh, glm::mat4 model)
+    void render_mesh(dw::Mesh::Ptr mesh, dw::gl::Program::Ptr program, glm::mat4 projection, glm::mat4 view, glm::mat4 model)
     {
-        m_mesh_program->set_uniform("u_Model", model);
+        program->set_uniform("u_Projection", projection);
+        program->set_uniform("u_View", view);
+        program->set_uniform("u_Model", model);
+        program->set_uniform("u_LightDirection", m_light_direction);
+        program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
+        program->set_uniform("u_Bias", m_bias);
 
         // Bind vertex array.
         mesh->mesh_vertex_array()->bind();
@@ -250,17 +245,20 @@ private:
             const dw::SubMesh&      submesh  = submeshes[i];
             const dw::Material::Ptr material = materials[submesh.mat_idx];
 
-            if (m_mesh_program->set_uniform("u_Albedo", 0))
+            if (material->albedo_texture() && program->set_uniform("s_Albedo", 0))
                 material->albedo_texture()->bind(0);
 
-            if (m_mesh_program->set_uniform("u_Normal", 1))
+            if (program->set_uniform("s_ShadowMap", 1))
+                m_shadow_map->texture()->bind(1);
+
+            /*if (m_mesh_program->set_uniform("u_Normal", 1))
                 material->normal_texture()->bind(1);
 
             if (m_mesh_program->set_uniform("u_Metallic", 2))
                 material->metallic_texture()->bind(2);
 
             if (m_mesh_program->set_uniform("u_Roughness", 3))
-                material->roughness_texture()->bind(3);
+                material->roughness_texture()->bind(3);*/
 
             // Issue draw call.
             glDrawElementsBaseVertex(GL_TRIANGLES, submesh.index_count, GL_UNSIGNED_INT, (void*)(sizeof(unsigned int) * submesh.base_index), submesh.base_vertex);
@@ -269,7 +267,21 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void render_scene()
+    void render_shadow_map()
+    {
+        m_shadow_map->begin_render();
+
+        m_shadow_map_program->use();
+
+        // Draw scene.
+        render_mesh(m_mesh, m_shadow_map_program, m_shadow_map->projection(), m_shadow_map->view(), glm::mat4(1.0f));
+
+        m_shadow_map->end_render();
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_main_camera()
     {
         glEnable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
@@ -286,32 +298,8 @@ private:
         // Bind shader program.
         m_mesh_program->use();
 
-        // Bind uniform buffers.
-        m_global_ubo->bind_base(0);
-
         // Draw scene.
-        render_mesh(m_mesh, glm::mat4(1.0f));
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------------------------
-
-    void update_uniforms()
-    {
-        // Global
-        {
-            void* ptr = m_global_ubo->map(GL_WRITE_ONLY);
-            memcpy(ptr, &m_global_uniforms, sizeof(GlobalUniforms));
-            m_global_ubo->unmap();
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------------------------
-
-    void update_transforms(dw::Camera* camera)
-    {
-        // Update camera matrices.
-        m_global_uniforms.view_proj = camera->m_projection * camera->m_view;
-        m_global_uniforms.cam_pos   = glm::vec4(camera->m_position, 0.0f);
+        render_mesh(m_mesh, m_mesh_program, m_main_camera->m_projection, m_main_camera->m_view, glm::mat4(1.0f));
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -344,7 +332,6 @@ private:
         }
 
         current->update();
-        update_transforms(current);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -353,26 +340,26 @@ private:
     // General GPU resources.
     std::unique_ptr<dw::ShadowMap>           m_shadow_map;
     std::unique_ptr<dw::HosekWilkieSkyModel> m_sky_model;
+    dw::gl::Shader::Ptr                      m_shadow_map_fs;
     dw::gl::Shader::Ptr                      m_mesh_fs;
     dw::gl::Shader::Ptr                      m_mesh_vs;
+    dw::gl::Program::Ptr                     m_shadow_map_program;
     dw::gl::Program::Ptr                     m_mesh_program;
-    dw::gl::Buffer::Ptr                      m_global_ubo;
 
     dw::Mesh::Ptr               m_mesh;
     std::unique_ptr<dw::Camera> m_main_camera;
 
-    GlobalUniforms m_global_uniforms;
-
     // Light
-    glm::vec3 m_light_direction = glm::vec3(0.0f, 0.0f, -1.0f);
+    glm::vec3 m_light_direction;
     float     m_sun_angle       = 0.0f;
+    float     m_bias      = 0.01f;
 
     // Camera controls.
     bool  m_mouse_look         = false;
     float m_heading_speed      = 0.0f;
     float m_sideways_speed     = 0.0f;
     float m_camera_sensitivity = 0.05f;
-    float m_camera_speed       = 0.05f;
+    float m_camera_speed       = 1.0f;
     bool  m_debug_gui          = true;
 
     // Camera orientation.
