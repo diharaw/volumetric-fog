@@ -2,92 +2,113 @@
 // DEFINES ----------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define INFINITY 100000000.0f
+#define LOCAL_SIZE_X 8
+#define LOCAL_SIZE_Y 8
+#define LOCAL_SIZE_Z 1
+#define VOXEL_GRID_SIZE_X 160
+#define VOXEL_GRID_SIZE_Y 90
+#define VOXEL_GRID_SIZE_Z 128
+#define M_PI 3.14159265359
+#define EPSILON 0.0001f
 
 // ------------------------------------------------------------------
 // INPUTS -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = LOCAL_SIZE_Z) in;
 
 // ------------------------------------------------------------------
-// INPUT ------------------------------------------------------------
+// OUTPUT -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(binding = 0, r32f) uniform image3D i_SDF;
-
-// ------------------------------------------------------------------
-// STRUCTURES -------------------------------------------------------
-// ------------------------------------------------------------------
-
-struct Vertex
-{
-    vec4 position;
-    vec4 tex_coord;
-    vec4 normal;
-    vec4 tangent;
-    vec4 bitangent;
-};
+layout(binding = 0, rgba16f) uniform writeonly image3D i_VoxelGrid;
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(std430, binding = 0) buffer Vertices
-{
-    Vertex vertices[];
-};
-
-layout(std430, binding = 1) buffer Indices
-{
-    uint indices[];
-};
-
-uniform vec3  u_GridStepSize;
-uniform vec3  u_GridOrigin;
-uniform uint  u_NumTriangles;
-uniform ivec3 u_VolumeSize;
+uniform sampler2D s_ShadowMap;
+uniform vec3      u_LightDirection;
+uniform vec3      u_LightColor;
+uniform mat4      u_LightViewProj;
+uniform float     u_Bias;
+uniform vec3      u_CameraPosition;
+uniform mat4      u_InvViewProj;
+uniform float     u_PhaseG;
+uniform float     u_Density;
+uniform float     u_ScatteringCoefficient;
+uniform float     u_AbsorptionCoefficient;
+uniform float     u_Near;
+uniform float     u_Far;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-float dot2(in vec2 v) { return dot(v, v); }
-
-// ------------------------------------------------------------------
-
-float dot2(in vec3 v) { return dot(v, v); }
-
-// ------------------------------------------------------------------
-
-float ndot(in vec2 a, in vec2 b) { return a.x * b.x - a.y * b.y; }
-
-// ------------------------------------------------------------------
-
-float sdf_triangle(vec3 p, vec3 a, vec3 b, vec3 c)
+float sample_shadow_map(vec2 coord, float z)
 {
-    vec3 ba  = b - a;
-    vec3 pa  = p - a;
-    vec3 cb  = c - b;
-    vec3 pb  = p - b;
-    vec3 ac  = a - c;
-    vec3 pc  = p - c;
-    vec3 nor = cross(ba, ac);
-
-    return sqrt(
-        (sign(dot(cross(ba, nor), pa)) + sign(dot(cross(cb, nor), pb)) + sign(dot(cross(ac, nor), pc)) < 2.0) ?
-            min(min(
-                    dot2(ba * clamp(dot(ba, pa) / dot2(ba), 0.0, 1.0) - pa),
-                    dot2(cb * clamp(dot(cb, pb) / dot2(cb), 0.0, 1.0) - pb)),
-                dot2(ac * clamp(dot(ac, pc) / dot2(ac), 0.0, 1.0) - pc)) :
-            dot(nor, pa) * dot(nor, pa) / dot2(nor));
+    // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
+    float closest_depth = texture(s_ShadowMap, proj_coords).r;
+    // get depth of current fragment from light's perspective
+    float current_depth = z;
+    // check whether current frag pos is in shadow
+    float bias   = u_Bias;
+    return current_depth - bias > closest_depth ? 1.0 : 0.0;
 }
 
 // ------------------------------------------------------------------
 
-bool is_front_facing(vec3 p, Vertex v0, Vertex v1, Vertex v2)
+float visibility(vec3 p)
 {
-    return dot(normalize(p - v0.position.xyz), v0.normal.xyz) >= 0.0f || dot(normalize(p - v1.position.xyz), v1.normal.xyz) >= 0.0f || dot(normalize(p - v2.position.xyz), v2.normal.xyz) >= 0.0f;
+    // Transform frag position into Light-space.
+    vec4 light_space_pos = u_LightViewProj * vec4(p, 1.0);
+
+    // Perspective divide
+    vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
+
+    // Transform to [0,1] range
+    proj_coords = proj_coords * 0.5 + 0.5;
+
+    return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
+}
+
+// ------------------------------------------------------------------
+
+vec3 voxel_world_position(ivec3 coord)
+{
+    // Create texture coordinate 
+    vec3 tex_coord = vec3(float(coord.x - 1) / VOXEL_GRID_SIZE_X,  
+                          float(coord.y - 1) / VOXEL_GRID_SIZE_Y,
+                          float(coord.z - 1) / VOXEL_GRID_SIZE_Z);
+
+    // Create NDC coordinate (OpenGL Z range is -1 to +1)
+    vec3 ndc_coord = 2.0f * tex_coord - vec3(1.0f);
+
+    // Transform back into world position.
+    vec4 world_pos = u_InvViewProj * vec4(ndc_pos, 1.0f);
+
+    // Undo projection.
+    world_pos = world_pos / world_pos.w;
+
+    return world_pos.xyz;
+}
+
+// ------------------------------------------------------------------
+
+// Henyey-Greenstein
+float phase_function(vec3 Wo, vec3 Wi, float g)
+{
+    float cos_theta = dot(Wo, Wi);
+    float denom = 1.0f + g * g + 2.0f * g * cos_theta;
+    return (1.0f / (4.0f * M_PI)) * (1.0f - g * g) / (denom * sqrt(denom));
+}
+
+// ------------------------------------------------------------------
+
+float z_slice_thickness(int z) 
+{
+    //return 1.0f; //linear depth
+    return exp(-float(VOXEL_GRID_SIZE_Z - z - 1) / float(VOXEL_GRID_SIZE_Z));
 }
 
 // ------------------------------------------------------------------
@@ -98,29 +119,33 @@ void main()
 {
     ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
 
-    if (all(lessThan(coord, u_VolumeSize)))
+    if (all(lessThan(coord, ivec3(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z))))
     {
-        vec3 p = u_GridOrigin + u_GridStepSize * vec3(coord);
+        // Get the world position of the current voxel.
+        vec3 world_pos = voxel_world_position(coord);
 
-        float closest_dist = INFINITY;
-        bool  front_facing = true;
+        // Get the view direction from the current voxel.
+        vec3 Wo = normalize(u_CameraPosition - world_pos);
 
-        for (int i = 0; i < u_NumTriangles; i++)
-        {
-            Vertex v0 = vertices[indices[3 * i]];
-            Vertex v1 = vertices[indices[3 * i + 1]];
-            Vertex v2 = vertices[indices[3 * i + 2]];
+        // Density and coefficient estimation.
+        float density = u_Density; // TODO: Add noise
+        float thickness = z_slice_thickness(coord.z);
+        float absorption = u_AbsorptionCoefficient * density * thickness;
+        float scattering = u_ScatteringCoefficient * density * thickness;
 
-            float h = sdf_triangle(p, v0.position.xyz, v1.position.xyz, v2.position.xyz);
+        // Perform lighting.
+        vec3 lighting = vec3(0.0f);
 
-            if (h < closest_dist)
-            {
-                closest_dist = h;
-                front_facing = is_front_facing(p, v0, v1, v2);
-            }
-        }
+        float visibility_value = visibility(world_pos);
 
-        imageStore(i_SDF, coord, vec4(front_facing ? closest_dist : -closest_dist));
+        if (visibility_value > EPSILON)
+            lighting = visibility_value * u_LightColor * phase_function(Wo, -u_LightDirection, u_PhaseG);
+        
+        // RGB = Amount of in-scattered light, A = Extinction coefficient.
+        vec4 color_and_coef = vec4(lighting * scattering, absorption + scattering);
+
+        // Write out lighting.
+        imageStore(i_VoxelGrid, coord, color_and_coef);
     }
 }
 

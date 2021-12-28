@@ -35,17 +35,22 @@ uniform sampler2D s_Normal;
 uniform sampler2D s_Metallic;
 uniform sampler2D s_Roughness;
 uniform sampler2D s_ShadowMap;
+uniform sampler3D s_VoxelGrid;
+uniform float u_Width;
+uniform float u_Height;
+uniform float u_Near;
+uniform float u_Far;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-float sample_shadow_map(vec2 coord)
+float sample_shadow_map(vec2 coord, float z)
 {
     // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closest_depth = texture(s_ShadowMap, proj_coords.xy).r;
+    float closest_depth = texture(s_ShadowMap, proj_coords).r;
     // get depth of current fragment from light's perspective
-    float current_depth = proj_coords.z;
+    float current_depth = z;
     // check whether current frag pos is in shadow
     float bias   = u_Bias;
     return current_depth - bias > closest_depth ? 1.0 : 0.0;
@@ -53,7 +58,7 @@ float sample_shadow_map(vec2 coord)
 
 // ------------------------------------------------------------------
 
-float shadow_occlussion(vec3 p)
+float visibility(vec3 p)
 {
     // Transform frag position into Light-space.
     vec4 light_space_pos = u_LightViewProj * vec4(p, 1.0);
@@ -64,7 +69,7 @@ float shadow_occlussion(vec3 p)
     // Transform to [0,1] range
     proj_coords = proj_coords * 0.5 + 0.5;
 
-    return 1.0 - sample_shadow_map(proj_coords.xy);
+    return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
 }
 
 // ------------------------------------------------------------------
@@ -159,11 +164,27 @@ vec3 direct_lighting(in vec3 Wo, in vec3 N, in vec3 P, in vec3 F0, in vec3 diffu
     const vec3 Wh = normalize(Wo + Wi);
 
     vec3  brdf       = evaluate_uber_brdf(diffuse_color, roughness, N, F0, Wo, Wh, Wi);
-    float visibility = shadow_occlussion(FS_IN_WorldPos);
 
     vec3 Li = u_LightColor;
 
-    return brdf * Li * visibility;
+    return brdf * Li * visibility(FS_IN_WorldPos);
+}
+
+// ------------------------------------------------------------------------
+
+float linear_z()
+{
+    return (gl_FragCoord.z / gl_FragCoord.w) / (u_Far - u_Near);
+}
+
+// ------------------------------------------------------------------
+
+vec3 add_inscattered_light(vec3 color)
+{
+    vec4 scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x)/u_Width, float(gl_FragCoord.y)/u_Height, linear_z()), 0.0f);
+    float transmittance = scattered_light.a;
+
+    return color * transmittance + scattered_light;
 }
 
 // ------------------------------------------------------------------
@@ -184,6 +205,9 @@ void main()
 
     // Ambient
     color += diffuse * 0.2f;
+
+    // Volumetric Light
+    color = add_inscattered_light(color);
 
     // Tone Map
     color = color / (color + vec3(1.0));

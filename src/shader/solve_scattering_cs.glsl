@@ -2,92 +2,57 @@
 // DEFINES ----------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define INFINITY 100000000.0f
+#define LOCAL_SIZE_X 16
+#define LOCAL_SIZE_Y 8
+#define LOCAL_SIZE_Z 1
+#define VOXEL_GRID_SIZE_X 160
+#define VOXEL_GRID_SIZE_Y 90
+#define VOXEL_GRID_SIZE_Z 128
+#define M_PI 3.14159265359
+#define EPSILON 0.0001f
 
 // ------------------------------------------------------------------
 // INPUTS -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = LOCAL_SIZE_Z) in;
 
 // ------------------------------------------------------------------
-// INPUT ------------------------------------------------------------
+// OUTPUT -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(binding = 0, r32f) uniform image3D i_SDF;
+layout(binding = 0, rgba16f) uniform writeonly image3D i_VoxelGrid;
 
 // ------------------------------------------------------------------
-// STRUCTURES -------------------------------------------------------
+// SHARED -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-struct Vertex
-{
-    vec4 position;
-    vec4 tex_coord;
-    vec4 normal;
-    vec4 tangent;
-    vec4 bitangent;
-};
+shared vec4 g_cached_scattering[VOXEL_GRID_SIZE_Z];
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout(std430, binding = 0) buffer Vertices
-{
-    Vertex vertices[];
-};
-
-layout(std430, binding = 1) buffer Indices
-{
-    uint indices[];
-};
-
-uniform vec3  u_GridStepSize;
-uniform vec3  u_GridOrigin;
-uniform uint  u_NumTriangles;
-uniform ivec3 u_VolumeSize;
+uniform sampler3D s_VoxelGrid;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-float dot2(in vec2 v) { return dot(v, v); }
-
-// ------------------------------------------------------------------
-
-float dot2(in vec3 v) { return dot(v, v); }
-
-// ------------------------------------------------------------------
-
-float ndot(in vec2 a, in vec2 b) { return a.x * b.x - a.y * b.y; }
-
-// ------------------------------------------------------------------
-
-float sdf_triangle(vec3 p, vec3 a, vec3 b, vec3 c)
+vec4 accumulate_scattering(vec4 front, vec4 back)
 {
-    vec3 ba  = b - a;
-    vec3 pa  = p - a;
-    vec3 cb  = c - b;
-    vec3 pb  = p - b;
-    vec3 ac  = a - c;
-    vec3 pc  = p - c;
-    vec3 nor = cross(ba, ac);
+    // Accumulate the incoming light by attenuating it using the transmittance.
+    vec3 light = front.rgb + clamp(exp(-front.a), 0.0f, 1.0f) * back.rgb;
 
-    return sqrt(
-        (sign(dot(cross(ba, nor), pa)) + sign(dot(cross(cb, nor), pb)) + sign(dot(cross(ac, nor), pc)) < 2.0) ?
-            min(min(
-                    dot2(ba * clamp(dot(ba, pa) / dot2(ba), 0.0, 1.0) - pa),
-                    dot2(cb * clamp(dot(cb, pb) / dot2(cb), 0.0, 1.0) - pb)),
-                dot2(ac * clamp(dot(ac, pc) / dot2(ac), 0.0, 1.0) - pc)) :
-            dot(nor, pa) * dot(nor, pa) / dot2(nor));
+    return vec4(light, front.a + back.a);
 }
 
 // ------------------------------------------------------------------
 
-bool is_front_facing(vec3 p, Vertex v0, Vertex v1, Vertex v2)
+void write_final_scattering(ivec3 coord, vec4 value)
 {
-    return dot(normalize(p - v0.position.xyz), v0.normal.xyz) >= 0.0f || dot(normalize(p - v1.position.xyz), v1.normal.xyz) >= 0.0f || dot(normalize(p - v2.position.xyz), v2.normal.xyz) >= 0.0f;
+    float transmittance = exp(-value.a);
+    imageStore(i_VoxelGrid, coord, vec4(value.rgb, transmittance));
 }
 
 // ------------------------------------------------------------------
@@ -96,32 +61,24 @@ bool is_front_facing(vec3 p, Vertex v0, Vertex v1, Vertex v2)
 
 void main()
 {
-    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 coord = ivec3(gl_WorkGroupID.x, gl_WorkGroupID.y, gl_LocalInvocationIndex);
 
-    if (all(lessThan(coord, u_VolumeSize)))
+    // Populate cache
+    g_cached_scattering[gl_LocalInvocationIndex] = texelFetch(s_VoxelGrid, coord, 0);
+
+    barrier();
+
+    // Accumulate scattering
+    if (gl_LocalInvocationIndex == 0)
     {
-        vec3 p = u_GridOrigin + u_GridStepSize * vec3(coord);
-
-        float closest_dist = INFINITY;
-        bool  front_facing = true;
-
-        for (int i = 0; i < u_NumTriangles; i++)
-        {
-            Vertex v0 = vertices[indices[3 * i]];
-            Vertex v1 = vertices[indices[3 * i + 1]];
-            Vertex v2 = vertices[indices[3 * i + 2]];
-
-            float h = sdf_triangle(p, v0.position.xyz, v1.position.xyz, v2.position.xyz);
-
-            if (h < closest_dist)
-            {
-                closest_dist = h;
-                front_facing = is_front_facing(p, v0, v1, v2);
-            }
-        }
-
-        imageStore(i_SDF, coord, vec4(front_facing ? closest_dist : -closest_dist));
+        for (int i = 1; i < VOXEL_GRID_SIZE_Z; i++)
+            g_cached_scattering[i] = accumulate_scattering(g_cached_scattering[i - 1], g_cached_scattering[i]);
     }
+
+    barrier();
+
+    // Write out final scattering.
+    write_final_scattering(coord, g_cached_scattering[gl_LocalInvocationIndex]);
 }
 
 // ------------------------------------------------------------------

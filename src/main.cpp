@@ -6,6 +6,7 @@
 #include <material.h>
 #include <shadow_map.h>
 #include <hosek_wilkie_sky_model.h>
+#include <profiler.h>
 #include <memory>
 #include <iostream>
 #include <stack>
@@ -14,7 +15,11 @@
 #include <random>
 #include <fstream>
 
+#define CAMERA_NEAR_PLANE 1.0f
 #define CAMERA_FAR_PLANE 5000.0f
+#define VOXEL_GRID_SIZE_X 160
+#define VOXEL_GRID_SIZE_Y 90
+#define VOXEL_GRID_SIZE_Z 128
 
 class VolumetricLighting : public dw::Application
 {
@@ -37,6 +42,9 @@ protected:
         if (!create_shaders())
             return false;
 
+        // Create volume textures.
+        create_textures();
+
         // Load scene.
         if (!load_scene())
             return false;
@@ -57,12 +65,17 @@ protected:
         // Update camera.
         update_camera();
 
+        m_sky_model->update(-m_light_direction);
+
         render_shadow_map();
+
+        voxel_grid_lighting();
+
+        voxel_grid_accumulation();
 
         render_main_camera();
 
-        m_sky_model->update(-m_light_direction);
-        m_sky_model->render(m_width, m_height, m_main_camera->m_view, m_main_camera->m_projection);
+        render_skybox();
 
         m_debug_draw.render(nullptr, m_width, m_height, m_main_camera->m_view_projection, m_main_camera->m_position);
     }
@@ -82,7 +95,7 @@ protected:
     void window_resized(int width, int height) override
     {
         // Override window resized method to update camera projection.
-        m_main_camera->update_projection(60.0f, 1.0f, CAMERA_FAR_PLANE, float(m_width) / float(m_height));
+        m_main_camera->update_projection(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height));
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -171,15 +184,19 @@ private:
         // Create general shaders
         m_mesh_vs       = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
         m_mesh_fs       = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_skybox_vs             = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
+        m_skybox_fs             = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
         m_shadow_map_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
+        m_volume_lighting_cs  = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/volume_lighting_cs.glsl");
+        m_solve_scattering_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/solve_scattering_cs.glsl");
 
-        if (!m_mesh_vs || !m_mesh_fs || !m_shadow_map_fs)
+        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_fs || !m_volume_lighting_cs || !m_solve_scattering_cs)
         {
             DW_LOG_FATAL("Failed to create Shaders");
             return false;
         }
 
-        // Create general shader program
+        // Create mesh shader program
         m_mesh_program = dw::gl::Program::create({ m_mesh_vs, m_mesh_fs });
 
         if (!m_mesh_program)
@@ -188,7 +205,16 @@ private:
             return false;
         }
 
-        // Create general shader program
+        // Create skybox shader program
+        m_skybox_program = dw::gl::Program::create({ m_skybox_vs, m_skybox_fs });
+
+        if (!m_skybox_program)
+        {
+            DW_LOG_FATAL("Failed to create Shader Program");
+            return false;
+        }
+
+        // Create shadow map shader program
         m_shadow_map_program = dw::gl::Program::create({ m_mesh_vs, m_shadow_map_fs });
 
         if (!m_shadow_map_program)
@@ -197,7 +223,33 @@ private:
             return false;
         }
 
+        // Create volume lighting shader program
+        m_volume_lighting_program = dw::gl::Program::create({ m_volume_lighting_cs });
+
+        if (!m_volume_lighting_program)
+        {
+            DW_LOG_FATAL("Failed to create Shader Program");
+            return false;
+        }
+
+        // Create solve scattering shader program
+        m_solve_scattering_program = dw::gl::Program::create({ m_solve_scattering_cs });
+
+        if (!m_solve_scattering_program)
+        {
+            DW_LOG_FATAL("Failed to create Shader Program");
+            return false;
+        }
+
         return true;
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void create_textures()
+    {
+        m_lighting_volume    = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
+        m_accumulated_volume = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -219,7 +271,7 @@ private:
 
     void create_camera()
     {
-        m_main_camera = std::make_unique<dw::Camera>(60.0f, 1.0f, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 3.0f, 15.0f), glm::vec3(-1.0f, 0.0, 0.0f));
+        m_main_camera = std::make_unique<dw::Camera>(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 3.0f, 15.0f), glm::vec3(-1.0f, 0.0, 0.0f));
         m_main_camera->update();
     }
 
@@ -235,6 +287,16 @@ private:
         program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
         program->set_uniform("u_Bias", m_bias);
         program->set_uniform("u_CameraPosition", m_main_camera->m_position);
+        program->set_uniform("u_Width", m_width);
+        program->set_uniform("u_Height", m_height);
+        program->set_uniform("u_Near", CAMERA_NEAR_PLANE);
+        program->set_uniform("u_Far", CAMERA_FAR_PLANE);
+
+        if (program->set_uniform("s_ShadowMap", 4))
+            m_shadow_map->texture()->bind(4);
+
+        if (program->set_uniform("s_VoxelGrid", 5))
+            m_accumulated_volume->bind(5);
 
         // Bind vertex array.
         mesh->mesh_vertex_array()->bind();
@@ -259,9 +321,6 @@ private:
             if (material->roughness_texture() && program->set_uniform("s_Roughness", 3))
                 material->roughness_texture()->bind(3);
 
-            if (program->set_uniform("s_ShadowMap", 4))
-                m_shadow_map->texture()->bind(4);
-
             // Issue draw call.
             glDrawElementsBaseVertex(GL_TRIANGLES, submesh.index_count, GL_UNSIGNED_INT, (void*)(sizeof(unsigned int) * submesh.base_index), submesh.base_vertex);
         }
@@ -269,8 +328,43 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void render_skybox()
+    {
+        DW_SCOPED_SAMPLE("Render Sky Box");
+
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDisable(GL_CULL_FACE);
+
+        m_skybox_program->use();
+        m_sky_model->cube_vao()->bind();
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, m_width, m_height);
+
+        m_skybox_program->set_uniform("u_View", m_main_camera->m_view);
+        m_skybox_program->set_uniform("u_Projection", m_main_camera->m_projection);
+        m_skybox_program->set_uniform("u_Width", m_width);
+        m_skybox_program->set_uniform("u_Height", m_height);
+
+        if (m_skybox_program->set_uniform("s_Cubemap", 0))
+            m_sky_model->texture()->bind(0);
+
+        if (m_skybox_program->set_uniform("s_VoxelGrid", 1))
+            m_accumulated_volume->bind(1);
+
+
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+
+        glDepthFunc(GL_LESS);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     void render_shadow_map()
     {
+        DW_SCOPED_SAMPLE("Render Shadow Map");
+
         m_shadow_map->begin_render();
 
         m_shadow_map_program->use();
@@ -285,6 +379,8 @@ private:
 
     void render_main_camera()
     {
+        DW_SCOPED_SAMPLE("Render Main Camera");
+
         glEnable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
         glEnable(GL_CULL_FACE);
@@ -302,6 +398,59 @@ private:
 
         // Draw scene.
         render_mesh(m_mesh, m_mesh_program, m_main_camera->m_projection, m_main_camera->m_view, glm::mat4(1.0f));
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void voxel_grid_lighting()
+    {
+        DW_SCOPED_SAMPLE("Voxel Grid Lighting");
+
+        m_volume_lighting_program->use();
+
+        m_lighting_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_lighting_volume->internal_format());            
+        
+        if (m_volume_lighting_program->set_uniform("s_ShadowMap", 0))
+            m_shadow_map->texture()->bind(0);
+
+        m_volume_lighting_program->set_uniform("u_LightDirection", m_light_direction);
+        m_volume_lighting_program->set_uniform("u_LightColor", m_light_color);
+        m_volume_lighting_program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
+        m_volume_lighting_program->set_uniform("u_Bias", m_bias);
+        m_volume_lighting_program->set_uniform("u_CameraPosition", m_main_camera->m_position);
+        m_volume_lighting_program->set_uniform("u_InvViewProj", glm::inverse(m_main_camera->m_view_projection));
+        m_volume_lighting_program->set_uniform("u_PhaseG", m_phase_g);
+        m_volume_lighting_program->set_uniform("u_Density", m_density);
+        m_volume_lighting_program->set_uniform("u_ScatteringCoefficient", m_scattering_coefficient);
+        m_volume_lighting_program->set_uniform("u_AbsorptionCoefficient", m_absorption_coefficient);
+        m_volume_lighting_program->set_uniform("u_Near", CAMERA_NEAR_PLANE);
+        m_volume_lighting_program->set_uniform("u_Far", CAMERA_FAR_PLANE);
+
+        const uint32_t LOCAL_SIZE_X = 8;
+        const uint32_t LOCAL_SIZE_Y = 8;
+        const uint32_t LOCAL_SIZE_Z = 1;
+
+        uint32_t size_x = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_X) / float(LOCAL_SIZE_X)));
+        uint32_t size_y = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Y) / float(LOCAL_SIZE_Y)));
+        uint32_t size_z = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Z) / float(LOCAL_SIZE_Z)));
+
+        glDispatchCompute(size_x, size_y, size_z);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void voxel_grid_accumulation()
+    {
+        DW_SCOPED_SAMPLE("Voxel Grid Accumulation");
+
+        m_solve_scattering_program->use();
+
+        m_accumulated_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_accumulated_volume->internal_format());
+
+        if (m_solve_scattering_program->set_uniform("s_VoxelGrid", 0))
+            m_lighting_volume->bind(0);
+
+        glDispatchCompute(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, 1);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -345,11 +494,26 @@ private:
     dw::gl::Shader::Ptr                      m_shadow_map_fs;
     dw::gl::Shader::Ptr                      m_mesh_fs;
     dw::gl::Shader::Ptr                      m_mesh_vs;
+    dw::gl::Shader::Ptr                      m_skybox_fs;
+    dw::gl::Shader::Ptr                      m_skybox_vs;
+    dw::gl::Shader::Ptr                      m_solve_scattering_cs;
+    dw::gl::Shader::Ptr                      m_volume_lighting_cs;
     dw::gl::Program::Ptr                     m_shadow_map_program;
     dw::gl::Program::Ptr                     m_mesh_program;
+    dw::gl::Program::Ptr                     m_skybox_program;
+    dw::gl::Program::Ptr                     m_solve_scattering_program;
+    dw::gl::Program::Ptr                     m_volume_lighting_program;
+    dw::gl::Texture3D::Ptr                   m_lighting_volume;
+    dw::gl::Texture3D::Ptr                   m_accumulated_volume;
 
     dw::Mesh::Ptr               m_mesh;
     std::unique_ptr<dw::Camera> m_main_camera;
+
+    // Volumetrics
+    float m_phase_g;
+    float m_density;
+    float m_scattering_coefficient;
+    float m_absorption_coefficient;
 
     // Light
     glm::vec3 m_light_direction;
