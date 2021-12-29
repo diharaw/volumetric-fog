@@ -16,10 +16,26 @@
 #include <fstream>
 
 #define CAMERA_NEAR_PLANE 1.0f
-#define CAMERA_FAR_PLANE 5000.0f
+#define CAMERA_FAR_PLANE 2500.0f
 #define VOXEL_GRID_SIZE_X 160
 #define VOXEL_GRID_SIZE_Y 90
 #define VOXEL_GRID_SIZE_Z 128
+
+struct UBO
+{
+    glm::mat4  view;
+    glm::mat4  projection;
+    glm::mat4  view_proj;
+    glm::mat4  light_view_proj;
+    glm::mat4  inv_view_proj;
+    glm::vec4  light_direction;
+    glm::vec4  light_color;
+    glm::vec4  camera_position;
+    glm::vec4  frustum_rays[4];
+    glm::vec4  bias_near_far;
+    glm::vec4  aniso_density_scattering_absorption;
+    glm::ivec4 width_height;
+};
 
 class VolumetricLighting : public dw::Application
 {
@@ -45,6 +61,9 @@ protected:
         // Create volume textures.
         create_textures();
 
+        // Create UBO
+        create_uniform_buffer();
+
         // Load scene.
         if (!load_scene())
             return false;
@@ -65,6 +84,8 @@ protected:
         // Update camera.
         update_camera();
 
+        update_uniforms();
+
         m_sky_model->update(-m_light_direction);
 
         render_shadow_map();
@@ -84,8 +105,15 @@ protected:
 
     void debug_gui()
     {
-        ImGui::InputFloat("Bias", &m_bias);
+        ImGui::SliderFloat("Anisotropy", &m_anisotropy, 0.0f, 1.0f);
+        ImGui::SliderFloat("Density", &m_density, 0.0f, 1.0f);
+        ImGui::SliderFloat("Scattering Coefficient", &m_scattering_coefficient, 0.0f, 1.0f);
+        ImGui::SliderFloat("Absorption Coefficient", &m_absorption_coefficient, 0.0f, 1.0f);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
+        ImGui::InputFloat("Bias", &m_bias);
+        ImGui::InputFloat("Light Intensity", &m_light_intensity);
+        ImGui::ColorEdit3("Light Color", &m_light_color.x);
+
         m_light_direction = glm::normalize(glm::vec3(0.0f, sin(m_sun_angle), cos(m_sun_angle)));
         m_shadow_map->set_direction(m_light_direction);
     }
@@ -182,15 +210,16 @@ private:
     bool create_shaders()
     {
         // Create general shaders
-        m_mesh_vs       = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
-        m_mesh_fs       = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
-        m_skybox_vs             = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
-        m_skybox_fs             = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
-        m_shadow_map_fs = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
+        m_mesh_vs             = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
+        m_mesh_fs             = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_skybox_vs           = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
+        m_skybox_fs           = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
+        m_shadow_map_vs       = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
+        m_shadow_map_fs       = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
         m_volume_lighting_cs  = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/volume_lighting_cs.glsl");
         m_solve_scattering_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/solve_scattering_cs.glsl");
 
-        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_fs || !m_volume_lighting_cs || !m_solve_scattering_cs)
+        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_volume_lighting_cs || !m_solve_scattering_cs)
         {
             DW_LOG_FATAL("Failed to create Shaders");
             return false;
@@ -215,7 +244,7 @@ private:
         }
 
         // Create shadow map shader program
-        m_shadow_map_program = dw::gl::Program::create({ m_mesh_vs, m_shadow_map_fs });
+        m_shadow_map_program = dw::gl::Program::create({ m_shadow_map_vs, m_shadow_map_fs });
 
         if (!m_shadow_map_program)
         {
@@ -250,6 +279,46 @@ private:
     {
         m_lighting_volume    = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
         m_accumulated_volume = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
+
+        m_lighting_volume->set_min_filter(GL_LINEAR);
+        m_lighting_volume->set_mag_filter(GL_LINEAR);
+        m_lighting_volume->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+
+        m_accumulated_volume->set_min_filter(GL_LINEAR);
+        m_accumulated_volume->set_mag_filter(GL_LINEAR);
+        m_accumulated_volume->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void create_uniform_buffer()
+    {
+        m_ubo = dw::gl::Buffer::create(GL_UNIFORM_BUFFER, GL_MAP_WRITE_BIT, sizeof(UBO));
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void update_uniforms()
+    {
+        UBO* ubo = (UBO*)m_ubo->map(GL_WRITE_ONLY);
+
+        ubo->view                                = m_main_camera->m_view;
+        ubo->projection                          = m_main_camera->m_projection;
+        ubo->view_proj                           = m_main_camera->m_view_projection;
+        ubo->light_view_proj                     = m_shadow_map->projection() * m_shadow_map->view();
+        ubo->inv_view_proj                       = glm::inverse(m_main_camera->m_view_projection);
+        ubo->light_direction                     = glm::vec4(m_light_direction, 0.0f);
+        ubo->light_color                         = glm::vec4(m_light_color * m_light_intensity, 0.0f);
+        ubo->camera_position                     = glm::vec4(m_main_camera->m_position, 0.0f);
+        ubo->frustum_rays[0]                     = glm::vec4(m_frustum_rays[0], 0.0f);
+        ubo->frustum_rays[1]                     = glm::vec4(m_frustum_rays[1], 0.0f);
+        ubo->frustum_rays[2]                     = glm::vec4(m_frustum_rays[2], 0.0f);
+        ubo->frustum_rays[3]                     = glm::vec4(m_frustum_rays[3], 0.0f);
+        ubo->bias_near_far                       = glm::vec4(m_bias, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, 0.0f);
+        ubo->aniso_density_scattering_absorption = glm::vec4(m_anisotropy, m_density, m_scattering_coefficient, m_absorption_coefficient);
+        ubo->width_height                        = glm::ivec4(m_width, m_height, 0, 0);
+
+        m_ubo->unmap();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -279,18 +348,7 @@ private:
 
     void render_mesh(dw::Mesh::Ptr mesh, dw::gl::Program::Ptr program, glm::mat4 projection, glm::mat4 view, glm::mat4 model)
     {
-        program->set_uniform("u_Projection", projection);
-        program->set_uniform("u_View", view);
         program->set_uniform("u_Model", model);
-        program->set_uniform("u_LightDirection", m_light_direction);
-        program->set_uniform("u_LightColor", m_light_color);
-        program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
-        program->set_uniform("u_Bias", m_bias);
-        program->set_uniform("u_CameraPosition", m_main_camera->m_position);
-        program->set_uniform("u_Width", m_width);
-        program->set_uniform("u_Height", m_height);
-        program->set_uniform("u_Near", CAMERA_NEAR_PLANE);
-        program->set_uniform("u_Far", CAMERA_FAR_PLANE);
 
         if (program->set_uniform("s_ShadowMap", 4))
             m_shadow_map->texture()->bind(4);
@@ -337,22 +395,19 @@ private:
         glDisable(GL_CULL_FACE);
 
         m_skybox_program->use();
+
         m_sky_model->cube_vao()->bind();
+
+        m_ubo->bind_base(0);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, m_width, m_height);
-
-        m_skybox_program->set_uniform("u_View", m_main_camera->m_view);
-        m_skybox_program->set_uniform("u_Projection", m_main_camera->m_projection);
-        m_skybox_program->set_uniform("u_Width", m_width);
-        m_skybox_program->set_uniform("u_Height", m_height);
 
         if (m_skybox_program->set_uniform("s_Cubemap", 0))
             m_sky_model->texture()->bind(0);
 
         if (m_skybox_program->set_uniform("s_VoxelGrid", 1))
             m_accumulated_volume->bind(1);
-
 
         glDrawArrays(GL_TRIANGLES, 0, 36);
 
@@ -366,6 +421,8 @@ private:
         DW_SCOPED_SAMPLE("Render Shadow Map");
 
         m_shadow_map->begin_render();
+
+        m_ubo->bind_base(0);
 
         m_shadow_map_program->use();
 
@@ -393,6 +450,8 @@ private:
         glClearDepth(1.0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        m_ubo->bind_base(0);
+
         // Bind shader program.
         m_mesh_program->use();
 
@@ -406,25 +465,14 @@ private:
     {
         DW_SCOPED_SAMPLE("Voxel Grid Lighting");
 
+        m_ubo->bind_base(0);
+
         m_volume_lighting_program->use();
 
-        m_lighting_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_lighting_volume->internal_format());            
-        
+        m_lighting_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_lighting_volume->internal_format());
+
         if (m_volume_lighting_program->set_uniform("s_ShadowMap", 0))
             m_shadow_map->texture()->bind(0);
-
-        m_volume_lighting_program->set_uniform("u_LightDirection", m_light_direction);
-        m_volume_lighting_program->set_uniform("u_LightColor", m_light_color);
-        m_volume_lighting_program->set_uniform("u_LightViewProj", m_shadow_map->projection() * m_shadow_map->view());
-        m_volume_lighting_program->set_uniform("u_Bias", m_bias);
-        m_volume_lighting_program->set_uniform("u_CameraPosition", m_main_camera->m_position);
-        m_volume_lighting_program->set_uniform("u_InvViewProj", glm::inverse(m_main_camera->m_view_projection));
-        m_volume_lighting_program->set_uniform("u_PhaseG", m_phase_g);
-        m_volume_lighting_program->set_uniform("u_Density", m_density);
-        m_volume_lighting_program->set_uniform("u_ScatteringCoefficient", m_scattering_coefficient);
-        m_volume_lighting_program->set_uniform("u_AbsorptionCoefficient", m_absorption_coefficient);
-        m_volume_lighting_program->set_uniform("u_Near", CAMERA_NEAR_PLANE);
-        m_volume_lighting_program->set_uniform("u_Far", CAMERA_FAR_PLANE);
 
         const uint32_t LOCAL_SIZE_X = 8;
         const uint32_t LOCAL_SIZE_Y = 8;
@@ -451,6 +499,31 @@ private:
             m_lighting_volume->bind(0);
 
         glDispatchCompute(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, 1);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void create_frustum_rays()
+    {
+        glm::mat4 inv_vp = glm::inverse(m_main_camera->m_view_projection);
+
+        auto frustum_ray = [&](float x, float y) -> glm::vec3 {
+            glm::vec4 v = inv_vp * glm::vec4(x, y, 1.0f, 1.0f);
+            v.x /= v.w;
+            v.y /= v.w;
+            v.z /= v.w;
+
+            return glm::vec3(v.x, v.y, v.z) - m_main_camera->m_position;
+        };
+
+        // Top-Left
+        m_frustum_rays[0] = frustum_ray(-1.0f, 1.0f);
+        // Top-Right
+        m_frustum_rays[1] = frustum_ray(1.0f, 1.0f);
+        // Bottom-Left
+        m_frustum_rays[2] = frustum_ray(-1.0f, -1.0f);
+        // Bottom-Right
+        m_frustum_rays[3] = frustum_ray(1.0f, -1.0f);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -483,6 +556,8 @@ private:
         }
 
         current->update();
+
+        create_frustum_rays();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -491,6 +566,7 @@ private:
     // General GPU resources.
     std::unique_ptr<dw::ShadowMap>           m_shadow_map;
     std::unique_ptr<dw::HosekWilkieSkyModel> m_sky_model;
+    dw::gl::Shader::Ptr                      m_shadow_map_vs;
     dw::gl::Shader::Ptr                      m_shadow_map_fs;
     dw::gl::Shader::Ptr                      m_mesh_fs;
     dw::gl::Shader::Ptr                      m_mesh_vs;
@@ -505,19 +581,22 @@ private:
     dw::gl::Program::Ptr                     m_volume_lighting_program;
     dw::gl::Texture3D::Ptr                   m_lighting_volume;
     dw::gl::Texture3D::Ptr                   m_accumulated_volume;
+    dw::gl::Buffer::Ptr                      m_ubo;
 
     dw::Mesh::Ptr               m_mesh;
     std::unique_ptr<dw::Camera> m_main_camera;
+    glm::vec3                   m_frustum_rays[4];
 
     // Volumetrics
-    float m_phase_g;
-    float m_density;
-    float m_scattering_coefficient;
-    float m_absorption_coefficient;
+    float m_anisotropy             = 0.7f;
+    float m_density                = 0.5f;
+    float m_scattering_coefficient = 0.5f;
+    float m_absorption_coefficient = 0.5f;
 
     // Light
     glm::vec3 m_light_direction;
     glm::vec3 m_light_color = glm::vec3(1.0f);
+    float     m_light_intensity = 1.0f;
     float     m_sun_angle   = 0.0f;
     float     m_bias        = 0.01f;
 

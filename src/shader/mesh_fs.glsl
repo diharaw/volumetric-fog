@@ -25,21 +25,28 @@ in vec3 FS_IN_Bitangent;
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-uniform float     u_Bias;
-uniform vec3      u_CameraPosition;
-uniform vec3      u_LightDirection;
-uniform vec3      u_LightColor;
-uniform mat4      u_LightViewProj;
+layout(std140, binding = 0) uniform Uniforms
+{
+    mat4  view;
+    mat4  projection;
+    mat4  view_proj;
+    mat4  light_view_proj;
+    mat4  inv_view_proj;
+    vec4  light_direction;
+    vec4  light_color;
+    vec4  camera_position;
+    vec4  frustum_rays[4];
+    vec4  bias_near_far;
+    vec4  aniso_density_scattering_absorption;
+    ivec4 width_height;
+};
+
 uniform sampler2D s_Albedo;
 uniform sampler2D s_Normal;
 uniform sampler2D s_Metallic;
 uniform sampler2D s_Roughness;
 uniform sampler2D s_ShadowMap;
 uniform sampler3D s_VoxelGrid;
-uniform float u_Width;
-uniform float u_Height;
-uniform float u_Near;
-uniform float u_Far;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -48,11 +55,11 @@ uniform float u_Far;
 float sample_shadow_map(vec2 coord, float z)
 {
     // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closest_depth = texture(s_ShadowMap, proj_coords).r;
+    float closest_depth = texture(s_ShadowMap, coord).r;
     // get depth of current fragment from light's perspective
     float current_depth = z;
     // check whether current frag pos is in shadow
-    float bias   = u_Bias;
+    float bias = bias_near_far.x;
     return current_depth - bias > closest_depth ? 1.0 : 0.0;
 }
 
@@ -61,13 +68,16 @@ float sample_shadow_map(vec2 coord, float z)
 float visibility(vec3 p)
 {
     // Transform frag position into Light-space.
-    vec4 light_space_pos = u_LightViewProj * vec4(p, 1.0);
+    vec4 light_space_pos = light_view_proj * vec4(p, 1.0);
 
     // Perspective divide
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
 
     // Transform to [0,1] range
     proj_coords = proj_coords * 0.5 + 0.5;
+
+    if (any(greaterThan(proj_coords.xy, vec2(1.0f))) || any(lessThan(proj_coords.xy, vec2(0.0f))))
+        return 1.0f;
 
     return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
 }
@@ -160,12 +170,12 @@ vec3 evaluate_uber_brdf(in vec3 diffuse_color, in float roughness, in vec3 N, in
 
 vec3 direct_lighting(in vec3 Wo, in vec3 N, in vec3 P, in vec3 F0, in vec3 diffuse_color, in float roughness)
 {
-    const vec3 Wi = -u_LightDirection;
+    const vec3 Wi = -light_direction.xyz;
     const vec3 Wh = normalize(Wo + Wi);
 
-    vec3  brdf       = evaluate_uber_brdf(diffuse_color, roughness, N, F0, Wo, Wh, Wi);
+    vec3 brdf = evaluate_uber_brdf(diffuse_color, roughness, N, F0, Wo, Wh, Wi);
 
-    vec3 Li = u_LightColor;
+    vec3 Li = light_color.xyz;
 
     return brdf * Li * visibility(FS_IN_WorldPos);
 }
@@ -174,17 +184,25 @@ vec3 direct_lighting(in vec3 Wo, in vec3 N, in vec3 P, in vec3 F0, in vec3 diffu
 
 float linear_z()
 {
-    return (gl_FragCoord.z / gl_FragCoord.w) / (u_Far - u_Near);
+    return (gl_FragCoord.z / gl_FragCoord.w) / bias_near_far.z;
+}
+
+// ------------------------------------------------------------------
+
+float exponential_z()
+{
+    float z = linear_z();
+    return z / exp(-1.0f + z);
 }
 
 // ------------------------------------------------------------------
 
 vec3 add_inscattered_light(vec3 color)
 {
-    vec4 scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x)/u_Width, float(gl_FragCoord.y)/u_Height, linear_z()), 0.0f);
-    float transmittance = scattered_light.a;
+    vec4  scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x) / float(width_height.x - 1), float(gl_FragCoord.y) / float(width_height.y - 1), linear_z()), 0.0f);
+    float transmittance   = scattered_light.a;
 
-    return color * transmittance + scattered_light;
+    return color * transmittance + scattered_light.rgb;
 }
 
 // ------------------------------------------------------------------
@@ -198,7 +216,7 @@ void main()
     const float roughness = texture(s_Roughness, FS_IN_TexCoord).r;
     const vec3  N         = get_normal_from_map(FS_IN_Tangent, FS_IN_Bitangent, FS_IN_Normal, FS_IN_TexCoord, s_Normal);
 
-    const vec3 Wo = normalize(u_CameraPosition.xyz - FS_IN_WorldPos);
+    const vec3 Wo = normalize(camera_position.xyz.xyz - FS_IN_WorldPos);
     const vec3 F0 = mix(vec3(0.04f), diffuse, metallic);
 
     vec3 color = direct_lighting(Wo, N, FS_IN_WorldPos, F0, diffuse, roughness);

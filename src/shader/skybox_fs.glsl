@@ -20,10 +20,24 @@ in vec3 FS_IN_WorldPos;
 // UNIFORMS  --------------------------------------------------------
 // ------------------------------------------------------------------
 
+layout(std140, binding = 0) uniform Uniforms
+{
+    mat4 view;
+    mat4 projection;
+    mat4 view_proj;
+    mat4  light_view_proj;
+    mat4  inv_view_proj;
+    vec4  light_direction;
+    vec4  light_color;
+    vec4  camera_position;
+    vec4  frustum_rays[4];
+    vec4 bias_near_far;
+    vec4 aniso_density_scattering_absorption;
+    ivec4 width_height;
+};
+
 uniform samplerCube s_Cubemap;
 uniform sampler3D s_VoxelGrid;
-uniform float u_Width;
-uniform float u_Height;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -31,10 +45,10 @@ uniform float u_Height;
 
 vec3 add_inscattered_light(vec3 color)
 {
-    vec4 scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x)/u_Width, float(gl_FragCoord.y)/u_Height, 1.0f), 0.0f);
+    vec4 scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x)/(width_height.x - 1), float(gl_FragCoord.y)/(width_height.y - 1), 1.0f), 0.0f);
     float transmittance = scattered_light.a;
 
-    return color * transmittance + scattered_light;
+    return color * transmittance + scattered_light.rgb;
 }
 
 // ------------------------------------------------------------------

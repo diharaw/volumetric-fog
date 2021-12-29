@@ -22,8 +22,22 @@ out vec3 FS_IN_Bitangent;
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-uniform mat4 u_View;
-uniform mat4 u_Projection;
+layout(std140, binding = 0) uniform Uniforms
+{
+    mat4  view;
+    mat4  projection;
+    mat4  view_proj;
+    mat4  light_view_proj;
+    mat4  inv_view_proj;
+    vec4  light_direction;
+    vec4  light_color;
+    vec4  camera_position;
+    vec4  frustum_rays[4];
+    vec4  bias_near_far;
+    vec4  aniso_density_scattering_absorption;
+    ivec4 width_height;
+};
+
 uniform mat4 u_Model;
 
 // ------------------------------------------------------------------
@@ -42,7 +56,7 @@ void main()
     FS_IN_Tangent   = normal_mat * VS_IN_Tangent.xyz;
     FS_IN_Bitangent = normal_mat * VS_IN_Bitangent.xyz;
 
-    gl_Position = u_Projection * u_View * world_pos;
+    gl_Position = view_proj * world_pos;
 }
 
 // ------------------------------------------------------------------
