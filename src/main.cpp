@@ -27,6 +27,7 @@ struct UBO
     glm::mat4  view;
     glm::mat4  projection;
     glm::mat4  view_proj;
+    glm::mat4  prev_view_proj;
     glm::mat4  light_view_proj;
     glm::mat4  inv_view_proj;
     glm::vec4  light_direction;
@@ -93,9 +94,11 @@ protected:
 
         render_shadow_map();
 
-        voxel_grid_lighting();
+        volumetric_light_injection();
 
-        voxel_grid_accumulation();
+        volumetric_temporal_integration();
+
+        volumetric_ray_march();
 
         render_main_camera();
 
@@ -115,6 +118,7 @@ protected:
         ImGui::SliderFloat("Scattering Coefficient", &m_scattering_coefficient, 0.0f, 1.0f);
         ImGui::SliderFloat("Absorption Coefficient", &m_absorption_coefficient, 0.0f, 1.0f);
         ImGui::SliderFloat("Depth Power", &m_depth_power, 1.0f, 10.0f);
+        ImGui::Checkbox("Temporal Accumulation", &m_temporal_accumulation);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
         ImGui::InputFloat("Bias", &m_bias);
         ImGui::InputFloat("Light Intensity", &m_light_intensity);
@@ -217,16 +221,17 @@ private:
     bool create_shaders()
     {
         // Create general shaders
-        m_mesh_vs             = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
-        m_mesh_fs             = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
-        m_skybox_vs           = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
-        m_skybox_fs           = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
-        m_shadow_map_vs       = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
-        m_shadow_map_fs       = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
-        m_volume_lighting_cs  = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/volume_lighting_cs.glsl");
-        m_solve_scattering_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/solve_scattering_cs.glsl");
+        m_mesh_vs                 = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
+        m_mesh_fs                 = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_skybox_vs               = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
+        m_skybox_fs               = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
+        m_shadow_map_vs           = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
+        m_shadow_map_fs           = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
+        m_light_injection_cs      = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/light_injection_cs.glsl");
+        m_ray_march_cs            = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/ray_march_cs.glsl");
+        m_temporal_integration_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/temporal_integration_cs.glsl");
 
-        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_volume_lighting_cs || !m_solve_scattering_cs)
+        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_light_injection_cs || !m_ray_march_cs || !m_temporal_integration_cs)
         {
             DW_LOG_FATAL("Failed to create Shaders");
             return false;
@@ -260,18 +265,27 @@ private:
         }
 
         // Create volume lighting shader program
-        m_volume_lighting_program = dw::gl::Program::create({ m_volume_lighting_cs });
+        m_light_injection_program = dw::gl::Program::create({ m_light_injection_cs });
 
-        if (!m_volume_lighting_program)
+        if (!m_light_injection_program)
         {
             DW_LOG_FATAL("Failed to create Shader Program");
             return false;
         }
 
         // Create solve scattering shader program
-        m_solve_scattering_program = dw::gl::Program::create({ m_solve_scattering_cs });
+        m_ray_march_program = dw::gl::Program::create({ m_ray_march_cs });
 
-        if (!m_solve_scattering_program)
+        if (!m_ray_march_program)
+        {
+            DW_LOG_FATAL("Failed to create Shader Program");
+            return false;
+        }
+
+        // Create temporal accumulation shader program
+        m_temporal_integration_program = dw::gl::Program::create({ m_temporal_integration_cs });
+
+        if (!m_temporal_integration_program)
         {
             DW_LOG_FATAL("Failed to create Shader Program");
             return false;
@@ -284,16 +298,25 @@ private:
 
     void create_textures()
     {
-        m_lighting_volume    = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
-        m_accumulated_volume = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
+        m_light_injection_voxel_grid = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
+        m_ray_march_voxel_grid       = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
 
-        m_lighting_volume->set_min_filter(GL_LINEAR);
-        m_lighting_volume->set_mag_filter(GL_LINEAR);
-        m_lighting_volume->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+        m_light_injection_voxel_grid->set_min_filter(GL_LINEAR);
+        m_light_injection_voxel_grid->set_mag_filter(GL_LINEAR);
+        m_light_injection_voxel_grid->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
 
-        m_accumulated_volume->set_min_filter(GL_LINEAR);
-        m_accumulated_volume->set_mag_filter(GL_LINEAR);
-        m_accumulated_volume->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+        m_ray_march_voxel_grid->set_min_filter(GL_LINEAR);
+        m_ray_march_voxel_grid->set_mag_filter(GL_LINEAR);
+        m_ray_march_voxel_grid->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+
+        for (int i = 0; i < 2; i++)
+        {
+            m_temporal_integration_voxel_grid[i] = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
+
+            m_temporal_integration_voxel_grid[i]->set_min_filter(GL_LINEAR);
+            m_temporal_integration_voxel_grid[i]->set_mag_filter(GL_LINEAR);
+            m_temporal_integration_voxel_grid[i]->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+        }
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -311,7 +334,7 @@ private:
             texture->set_wrapping(GL_REPEAT, GL_REPEAT, GL_REPEAT);
 
             m_blue_noise_textures[i] = texture;
-        }            
+        }
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -330,6 +353,7 @@ private:
         ubo->view                                = m_main_camera->m_view;
         ubo->projection                          = m_main_camera->m_projection;
         ubo->view_proj                           = m_main_camera->m_view_projection;
+        ubo->prev_view_proj                      = m_frame_idx == 0 ? m_main_camera->m_view_projection : m_prev_view_projection;
         ubo->light_view_proj                     = m_shadow_map->projection() * m_shadow_map->view();
         ubo->inv_view_proj                       = glm::inverse(m_main_camera->m_view_projection);
         ubo->light_direction                     = glm::vec4(m_light_direction, 0.0f);
@@ -340,6 +364,8 @@ private:
         ubo->width_height                        = glm::ivec4(m_width, m_height, 0, 0);
 
         m_ubo->unmap();
+
+        m_prev_view_projection = m_main_camera->m_view_projection;
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -424,7 +450,7 @@ private:
             m_sky_model->texture()->bind(0);
 
         if (m_skybox_program->set_uniform("s_VoxelGrid", 1))
-            m_accumulated_volume->bind(1);
+            m_ray_march_voxel_grid->bind(1);
 
         glDrawArrays(GL_TRIANGLES, 0, 36);
 
@@ -476,7 +502,7 @@ private:
             m_shadow_map->texture()->bind(4);
 
         if (m_mesh_program->set_uniform("s_VoxelGrid", 5))
-            m_accumulated_volume->bind(5);
+            m_ray_march_voxel_grid->bind(5);
 
         if (m_mesh_program->set_uniform("s_BlueNoise", 6))
             m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(6);
@@ -487,20 +513,20 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void voxel_grid_lighting()
+    void volumetric_light_injection()
     {
-        DW_SCOPED_SAMPLE("Voxel Grid Lighting");
+        DW_SCOPED_SAMPLE("Volumetric Light Injection");
 
         m_ubo->bind_base(0);
 
-        m_volume_lighting_program->use();
+        m_light_injection_program->use();
 
-        m_lighting_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_lighting_volume->internal_format());
+        m_light_injection_voxel_grid->bind_image(0, 0, 0, GL_WRITE_ONLY, m_light_injection_voxel_grid->internal_format());
 
-        if (m_volume_lighting_program->set_uniform("s_ShadowMap", 0))
+        if (m_light_injection_program->set_uniform("s_ShadowMap", 0))
             m_shadow_map->texture()->bind(0);
 
-        if (m_volume_lighting_program->set_uniform("s_BlueNoise", 1))
+        if (m_light_injection_program->set_uniform("s_BlueNoise", 1))
             m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(1);
 
         const uint32_t LOCAL_SIZE_X = 8;
@@ -516,20 +542,57 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void voxel_grid_accumulation()
+    void volumetric_temporal_integration()
     {
-        DW_SCOPED_SAMPLE("Voxel Grid Accumulation");
+        DW_SCOPED_SAMPLE("Volumetric Temporal Integration");
 
-        m_solve_scattering_program->use();
+        m_ubo->bind_base(0);
 
-        m_accumulated_volume->bind_image(0, 0, 0, GL_WRITE_ONLY, m_accumulated_volume->internal_format());
+        m_temporal_integration_program->use();
 
-        if (m_solve_scattering_program->set_uniform("s_VoxelGrid", 0))
-            m_lighting_volume->bind(0);
+        uint32_t read_idx  = static_cast<uint32_t>(m_ping_pong);
+        uint32_t write_idx = static_cast<uint32_t>(!m_ping_pong);
+
+        m_temporal_integration_voxel_grid[write_idx]->bind_image(0, 0, 0, GL_WRITE_ONLY, m_temporal_integration_voxel_grid[write_idx]->internal_format());
+
+        if (m_temporal_integration_program->set_uniform("s_Current", 0))
+            m_light_injection_voxel_grid->bind(0);
+
+        if (m_temporal_integration_program->set_uniform("s_History", 1))
+            m_temporal_integration_voxel_grid[read_idx]->bind(1);
+
+        m_temporal_integration_program->set_uniform("u_Accumulation", m_temporal_accumulation);
+
+        const uint32_t LOCAL_SIZE_X = 8;
+        const uint32_t LOCAL_SIZE_Y = 8;
+        const uint32_t LOCAL_SIZE_Z = 1;
+
+        uint32_t size_x = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_X) / float(LOCAL_SIZE_X)));
+        uint32_t size_y = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Y) / float(LOCAL_SIZE_Y)));
+        uint32_t size_z = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Z) / float(LOCAL_SIZE_Z)));
+
+        glDispatchCompute(size_x, size_y, size_z);
+
+        m_ping_pong = !m_ping_pong;
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void volumetric_ray_march()
+    {
+        DW_SCOPED_SAMPLE("Volumetric Ray March");
+
+        m_ray_march_program->use();
+
+        m_ray_march_voxel_grid->bind_image(0, 0, 0, GL_WRITE_ONLY, m_ray_march_voxel_grid->internal_format());
+
+        uint32_t read_idx = static_cast<uint32_t>(m_ping_pong);
+
+        if (m_ray_march_program->set_uniform("s_VoxelGrid", 0))
+            m_temporal_integration_voxel_grid[read_idx]->bind(0);
 
         glDispatchCompute(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, 1);
     }
-
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
@@ -575,21 +638,25 @@ private:
     dw::gl::Shader::Ptr                      m_mesh_vs;
     dw::gl::Shader::Ptr                      m_skybox_fs;
     dw::gl::Shader::Ptr                      m_skybox_vs;
-    dw::gl::Shader::Ptr                      m_solve_scattering_cs;
-    dw::gl::Shader::Ptr                      m_volume_lighting_cs;
+    dw::gl::Shader::Ptr                      m_ray_march_cs;
+    dw::gl::Shader::Ptr                      m_light_injection_cs;
+    dw::gl::Shader::Ptr                      m_temporal_integration_cs;
     dw::gl::Program::Ptr                     m_shadow_map_program;
     dw::gl::Program::Ptr                     m_mesh_program;
     dw::gl::Program::Ptr                     m_skybox_program;
-    dw::gl::Program::Ptr                     m_solve_scattering_program;
-    dw::gl::Program::Ptr                     m_volume_lighting_program;
-    dw::gl::Texture3D::Ptr                   m_lighting_volume;
-    dw::gl::Texture3D::Ptr                   m_accumulated_volume;
+    dw::gl::Program::Ptr                     m_ray_march_program;
+    dw::gl::Program::Ptr                     m_light_injection_program;
+    dw::gl::Program::Ptr                     m_temporal_integration_program;
+    dw::gl::Texture3D::Ptr                   m_light_injection_voxel_grid;
+    dw::gl::Texture3D::Ptr                   m_ray_march_voxel_grid;
+    dw::gl::Texture3D::Ptr                   m_temporal_integration_voxel_grid[2];
     dw::gl::Buffer::Ptr                      m_ubo;
     std::vector<dw::gl::Texture2D::Ptr>      m_blue_noise_textures;
 
     dw::Mesh::Ptr               m_mesh;
     glm::mat4                   m_transform;
     std::unique_ptr<dw::Camera> m_main_camera;
+    glm::mat4                   m_prev_view_projection;
 
     // Volumetrics
     float m_anisotropy             = 0.7f;
@@ -598,14 +665,16 @@ private:
     float m_absorption_coefficient = 0.5f;
     float m_depth_power            = 1.0f;
     int   m_frame_idx              = 0;
+    bool  m_ping_pong              = false;
+    bool  m_temporal_accumulation  = true;
 
     // Light
     glm::vec3 m_light_direction;
-    glm::vec3 m_light_color = glm::vec3(1.0f);
-    float     m_light_intensity = 10.0f;
+    glm::vec3 m_light_color             = glm::vec3(1.0f);
+    float     m_light_intensity         = 10.0f;
     float     m_ambient_light_intensity = 0.001f;
-    float     m_sun_angle   = 0.0f;
-    float     m_bias        = 0.001f;
+    float     m_sun_angle               = 0.0f;
+    float     m_bias                    = 0.001f;
 
     // Camera controls.
     bool  m_mouse_look         = false;

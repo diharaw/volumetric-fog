@@ -27,6 +27,7 @@ layout(std140, binding = 0) uniform Uniforms
     mat4  view;
     mat4  projection;
     mat4  view_proj;
+    mat4  prev_view_proj;
     mat4  light_view_proj;
     mat4  inv_view_proj;
     vec4  light_direction;
