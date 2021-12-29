@@ -1,3 +1,5 @@
+#include <common.glsl>
+
 // ------------------------------------------------------------------
 // DEFINES  ---------------------------------------------------------
 // ------------------------------------------------------------------
@@ -35,8 +37,7 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  light_direction;
     vec4  light_color;
     vec4  camera_position;
-    vec4  frustum_rays[4];
-    vec4  bias_near_far;
+    vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
     ivec4 width_height;
 };
@@ -59,7 +60,7 @@ float sample_shadow_map(vec2 coord, float z)
     // get depth of current fragment from light's perspective
     float current_depth = z;
     // check whether current frag pos is in shadow
-    float bias = bias_near_far.x;
+    float bias = bias_near_far_pow.x;
     return current_depth - bias > closest_depth ? 1.0 : 0.0;
 }
 
@@ -180,26 +181,13 @@ vec3 direct_lighting(in vec3 Wo, in vec3 N, in vec3 P, in vec3 F0, in vec3 diffu
     return brdf * Li * visibility(FS_IN_WorldPos);
 }
 
-// ------------------------------------------------------------------------
-
-float linear_z()
-{
-    return (gl_FragCoord.z / gl_FragCoord.w) / bias_near_far.z;
-}
-
 // ------------------------------------------------------------------
 
-float exponential_z()
+vec3 add_inscattered_light(vec3 color, vec3 world_pos)
 {
-    float z = linear_z();
-    return z / exp(-1.0f + z);
-}
+    vec3 uv = world_to_uv(world_pos, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, view_proj);
 
-// ------------------------------------------------------------------
-
-vec3 add_inscattered_light(vec3 color)
-{
-    vec4  scattered_light = textureLod(s_VoxelGrid, vec3(float(gl_FragCoord.x) / float(width_height.x - 1), float(gl_FragCoord.y) / float(width_height.y - 1), linear_z()), 0.0f);
+    vec4  scattered_light = textureLod(s_VoxelGrid, uv, 0.0f);
     float transmittance   = scattered_light.a;
 
     return color * transmittance + scattered_light.rgb;
@@ -225,7 +213,7 @@ void main()
     color += diffuse * 0.2f;
 
     // Volumetric Light
-    color = add_inscattered_light(color);
+    color = add_inscattered_light(color, FS_IN_WorldPos);
 
     // Tone Map
     color = color / (color + vec3(1.0));

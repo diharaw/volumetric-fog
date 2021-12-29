@@ -32,8 +32,7 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  light_direction;
     vec4  light_color;
     vec4  camera_position;
-    vec4  frustum_rays[4];
-    vec4  bias_near_far;
+    vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
     ivec4 width_height;
 };

@@ -1,3 +1,5 @@
+#include <common.glsl>
+
 // ------------------------------------------------------------------
 // DEFINES ----------------------------------------------------------
 // ------------------------------------------------------------------
@@ -5,9 +7,6 @@
 #define LOCAL_SIZE_X 8
 #define LOCAL_SIZE_Y 8
 #define LOCAL_SIZE_Z 1
-#define VOXEL_GRID_SIZE_X 160
-#define VOXEL_GRID_SIZE_Y 90
-#define VOXEL_GRID_SIZE_Z 128
 #define M_PI 3.14159265359
 #define EPSILON 0.0001f
 
@@ -37,8 +36,7 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  light_direction;
     vec4  light_color;
     vec4  camera_position;
-    vec4  frustum_rays[4];
-    vec4  bias_near_far;
+    vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
     ivec4 width_height;
 };
@@ -56,7 +54,7 @@ float sample_shadow_map(vec2 coord, float z)
     // get depth of current fragment from light's perspective
     float current_depth = z;
     // check whether current frag pos is in shadow
-    float bias = bias_near_far.x;
+    float bias = bias_near_far_pow.x;
     return current_depth - bias > closest_depth ? 1.0 : 0.0;
 }
 
@@ -77,36 +75,6 @@ float visibility(vec3 p)
         return 1.0f;
 
     return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
-}
-
-// ------------------------------------------------------------------
-
-vec3 frustum_ray(vec2 uv)
-{
-    vec3 h_ray_0 = mix(frustum_rays[0].xyz, frustum_rays[1].xyz, uv.x);
-    vec3 h_ray_1 = mix(frustum_rays[2].xyz, frustum_rays[3].xyz, uv.x);
-
-    return mix(h_ray_1, h_ray_0, uv.y);
-}
-
-// ------------------------------------------------------------------
-
-vec3 voxel_world_position(ivec3 coord)
-{
-    // Create texture coordinate
-    vec2 uv = vec2(float(coord.x) / float(VOXEL_GRID_SIZE_X - 1), float(coord.y) / float(VOXEL_GRID_SIZE_Y - 1));
-
-    // Get linear Z
-    float view_z   = bias_near_far.y + (float(coord.z) / float(VOXEL_GRID_SIZE_Z - 1)) * (bias_near_far.z - bias_near_far.y);
-    float linear_z = view_z / bias_near_far.z;
-
-    // Convert linear z to exponential
-    float exp_z = linear_z / exp(-1.0f + linear_z);
-
-    // Compute world position
-    vec3 world_pos = camera_position.xyz + frustum_ray(uv) * linear_z;
-
-    return world_pos;
 }
 
 // ------------------------------------------------------------------
@@ -138,7 +106,7 @@ void main()
     if (all(lessThan(coord, ivec3(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z))))
     {
         // Get the world position of the current voxel.
-        vec3 world_pos = voxel_world_position(coord);
+        vec3 world_pos = id_to_world(coord, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, inv_view_proj);
 
         // Get the view direction from the current voxel.
         vec3 Wo = normalize(camera_position.xyz - world_pos);
@@ -150,12 +118,12 @@ void main()
         float scattering = aniso_density_scattering_absorption.w * density * thickness;
 
         // Perform lighting.
-        vec3 lighting = vec3(0.0f);
+        vec3 lighting = light_color.rgb * light_color.a;
 
         float visibility_value = visibility(world_pos);
 
         if (visibility_value > EPSILON)
-            lighting = visibility_value * light_color.xyz * phase_function(Wo, -light_direction.xyz, aniso_density_scattering_absorption.x);
+            lighting += visibility_value * light_color.xyz * phase_function(Wo, -light_direction.xyz, aniso_density_scattering_absorption.x);
 
         // RGB = Amount of in-scattered light, A = Extinction coefficient.
         vec4 color_and_coef = vec4(lighting * scattering, absorption + scattering);

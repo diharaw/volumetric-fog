@@ -1,13 +1,12 @@
+#include <common.glsl>
+
 // ------------------------------------------------------------------
 // DEFINES ----------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define LOCAL_SIZE_X 16
-#define LOCAL_SIZE_Y 8
+#define LOCAL_SIZE_X VOXEL_GRID_SIZE_Z
+#define LOCAL_SIZE_Y 1
 #define LOCAL_SIZE_Z 1
-#define VOXEL_GRID_SIZE_X 160
-#define VOXEL_GRID_SIZE_Y 90
-#define VOXEL_GRID_SIZE_Z 128
 #define M_PI 3.14159265359
 #define EPSILON 0.0001f
 
