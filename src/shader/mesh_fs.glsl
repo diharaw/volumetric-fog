@@ -48,6 +48,7 @@ uniform sampler2D s_Metallic;
 uniform sampler2D s_Roughness;
 uniform sampler2D s_ShadowMap;
 uniform sampler3D s_VoxelGrid;
+uniform sampler2D s_BlueNoise;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------

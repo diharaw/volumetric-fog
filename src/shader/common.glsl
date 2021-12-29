@@ -1,6 +1,7 @@
 #define VOXEL_GRID_SIZE_X 160
 #define VOXEL_GRID_SIZE_Y 90
 #define VOXEL_GRID_SIZE_Z 128
+#define BLUE_NOISE_TEXTURE_SIZE 128
 
 // ------------------------------------------------------------------
 
@@ -102,7 +103,7 @@ vec3 id_to_uv_with_jitter(ivec3 id, float jitter)
 {
     return vec3((float(id.x) + 0.5f) / float(VOXEL_GRID_SIZE_X),
                 (float(id.y) + 0.5f) / float(VOXEL_GRID_SIZE_Y),
-                (float(id.z) + jitter) / float(VOXEL_GRID_SIZE_Z));
+                (float(id.z) + 0.5f + jitter) / float(VOXEL_GRID_SIZE_Z));
 }
 
 // ------------------------------------------------------------------

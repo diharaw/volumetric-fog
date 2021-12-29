@@ -20,6 +20,7 @@
 #define VOXEL_GRID_SIZE_X 160
 #define VOXEL_GRID_SIZE_Y 90
 #define VOXEL_GRID_SIZE_Z 128
+#define NUM_BLUE_NOISE_TEXTURES 16
 
 struct UBO
 {
@@ -60,6 +61,9 @@ protected:
         // Create volume textures.
         create_textures();
 
+        // Load blue noise textures.
+        load_blue_noise_textures();
+
         // Create UBO
         create_uniform_buffer();
 
@@ -96,8 +100,10 @@ protected:
         render_main_camera();
 
         render_skybox();
-        
+
         m_debug_draw.render(nullptr, m_width, m_height, m_main_camera->m_view_projection, m_main_camera->m_position);
+
+        m_frame_idx++;
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -292,6 +298,24 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void load_blue_noise_textures()
+    {
+        m_blue_noise_textures.resize(NUM_BLUE_NOISE_TEXTURES);
+
+        for (int i = 0; i < NUM_BLUE_NOISE_TEXTURES; i++)
+        {
+            auto texture = dw::gl::Texture2D::create_from_file("texture/blue_noise/LDR_LLL1_" + std::to_string(i) + ".png");
+
+            texture->set_min_filter(GL_NEAREST);
+            texture->set_mag_filter(GL_NEAREST);
+            texture->set_wrapping(GL_REPEAT, GL_REPEAT, GL_REPEAT);
+
+            m_blue_noise_textures[i] = texture;
+        }            
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     void create_uniform_buffer()
     {
         m_ubo = dw::gl::Buffer::create(GL_UNIFORM_BUFFER, GL_MAP_WRITE_BIT, sizeof(UBO));
@@ -348,12 +372,6 @@ private:
     void render_mesh(dw::Mesh::Ptr mesh, dw::gl::Program::Ptr program, glm::mat4 projection, glm::mat4 view, glm::mat4 model)
     {
         program->set_uniform("u_Model", model);
-
-        if (program->set_uniform("s_ShadowMap", 4))
-            m_shadow_map->texture()->bind(4);
-
-        if (program->set_uniform("s_VoxelGrid", 5))
-            m_accumulated_volume->bind(5);
 
         // Bind vertex array.
         mesh->mesh_vertex_array()->bind();
@@ -454,6 +472,15 @@ private:
         // Bind shader program.
         m_mesh_program->use();
 
+        if (m_mesh_program->set_uniform("s_ShadowMap", 4))
+            m_shadow_map->texture()->bind(4);
+
+        if (m_mesh_program->set_uniform("s_VoxelGrid", 5))
+            m_accumulated_volume->bind(5);
+
+        if (m_mesh_program->set_uniform("s_BlueNoise", 6))
+            m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(6);
+
         // Draw scene.
         render_mesh(m_mesh, m_mesh_program, m_main_camera->m_projection, m_main_camera->m_view, m_transform);
     }
@@ -472,6 +499,9 @@ private:
 
         if (m_volume_lighting_program->set_uniform("s_ShadowMap", 0))
             m_shadow_map->texture()->bind(0);
+
+        if (m_volume_lighting_program->set_uniform("s_BlueNoise", 1))
+            m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(1);
 
         const uint32_t LOCAL_SIZE_X = 8;
         const uint32_t LOCAL_SIZE_Y = 8;
@@ -555,6 +585,7 @@ private:
     dw::gl::Texture3D::Ptr                   m_lighting_volume;
     dw::gl::Texture3D::Ptr                   m_accumulated_volume;
     dw::gl::Buffer::Ptr                      m_ubo;
+    std::vector<dw::gl::Texture2D::Ptr>      m_blue_noise_textures;
 
     dw::Mesh::Ptr               m_mesh;
     glm::mat4                   m_transform;
@@ -566,6 +597,7 @@ private:
     float m_scattering_coefficient = 0.5f;
     float m_absorption_coefficient = 0.5f;
     float m_depth_power            = 1.0f;
+    int   m_frame_idx              = 0;
 
     // Light
     glm::vec3 m_light_direction;

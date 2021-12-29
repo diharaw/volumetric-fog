@@ -42,6 +42,7 @@ layout(std140, binding = 0) uniform Uniforms
 };
 
 uniform sampler2D s_ShadowMap;
+uniform sampler2D s_BlueNoise;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -96,6 +97,14 @@ float z_slice_thickness(int z)
 }
 
 // ------------------------------------------------------------------
+
+float sample_blue_noise(ivec3 coord)
+{
+    ivec2 noise_coord = (coord.xy + ivec2(0, 1) * coord.z * BLUE_NOISE_TEXTURE_SIZE) % BLUE_NOISE_TEXTURE_SIZE;
+    return texelFetch(s_BlueNoise, noise_coord, 0).r;
+}
+
+// ------------------------------------------------------------------
 // MAIN -------------------------------------------------------------
 // ------------------------------------------------------------------
 
@@ -105,8 +114,11 @@ void main()
 
     if (all(lessThan(coord, ivec3(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z))))
     {
+        // Get jitter for the current pixel, remapped to -0.5 to +0.5 range.
+        float jitter = (sample_blue_noise(coord) - 0.5f) * 0.999f;
+
         // Get the world position of the current voxel.
-        vec3 world_pos = id_to_world(coord, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, inv_view_proj);
+        vec3 world_pos = id_to_world_with_jitter(coord, jitter, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, inv_view_proj);
 
         // Get the view direction from the current voxel.
         vec3 Wo = normalize(camera_position.xyz - world_pos);
