@@ -361,7 +361,7 @@ private:
         ubo->camera_position                     = glm::vec4(m_main_camera->m_position, 0.0f);
         ubo->bias_near_far_pow                   = glm::vec4(m_bias, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, m_depth_power);
         ubo->aniso_density_scattering_absorption = glm::vec4(m_anisotropy, m_density, m_scattering_coefficient, m_absorption_coefficient);
-        ubo->width_height                        = glm::ivec4(m_width, m_height, 0, 0);
+        ubo->width_height                        = glm::ivec4(m_width, m_height, m_frame_idx, 0);
 
         m_ubo->unmap();
 
@@ -505,7 +505,7 @@ private:
             m_ray_march_voxel_grid->bind(5);
 
         if (m_mesh_program->set_uniform("s_BlueNoise", 6))
-            m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(6);
+            m_blue_noise_textures[m_temporal_accumulation ? m_frame_idx % NUM_BLUE_NOISE_TEXTURES : 0]->bind(6);
 
         // Draw scene.
         render_mesh(m_mesh, m_mesh_program, m_main_camera->m_projection, m_main_camera->m_view, m_transform);
@@ -527,7 +527,7 @@ private:
             m_shadow_map->texture()->bind(0);
 
         if (m_light_injection_program->set_uniform("s_BlueNoise", 1))
-            m_blue_noise_textures[m_frame_idx % NUM_BLUE_NOISE_TEXTURES]->bind(1);
+            m_blue_noise_textures[m_temporal_accumulation ? m_frame_idx % NUM_BLUE_NOISE_TEXTURES : 0]->bind(1);
 
         const uint32_t LOCAL_SIZE_X = 8;
         const uint32_t LOCAL_SIZE_Y = 8;
@@ -591,7 +591,15 @@ private:
         if (m_ray_march_program->set_uniform("s_VoxelGrid", 0))
             m_temporal_integration_voxel_grid[read_idx]->bind(0);
 
-        glDispatchCompute(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, 1);
+        const uint32_t LOCAL_SIZE_X = 8;
+        const uint32_t LOCAL_SIZE_Y = 8;
+        const uint32_t LOCAL_SIZE_Z = 1;
+
+        uint32_t size_x = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_X) / float(LOCAL_SIZE_X)));
+        uint32_t size_y = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Y) / float(LOCAL_SIZE_Y)));
+        uint32_t size_z = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Z) / float(LOCAL_SIZE_Z)));
+
+        glDispatchCompute(size_x, size_y, size_z);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -681,7 +689,7 @@ private:
     float m_heading_speed      = 0.0f;
     float m_sideways_speed     = 0.0f;
     float m_camera_sensitivity = 0.05f;
-    float m_camera_speed       = 0.1f;
+    float m_camera_speed       = 0.05f;
     bool  m_debug_gui          = true;
 
     // Camera orientation.

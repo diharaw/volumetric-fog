@@ -4,8 +4,8 @@
 // DEFINES ----------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define LOCAL_SIZE_X VOXEL_GRID_SIZE_Z
-#define LOCAL_SIZE_Y 1
+#define LOCAL_SIZE_X 8
+#define LOCAL_SIZE_Y 8
 #define LOCAL_SIZE_Z 1
 #define M_PI 3.14159265359
 #define EPSILON 0.0001f
@@ -21,12 +21,6 @@ layout(local_size_x = LOCAL_SIZE_X, local_size_y = LOCAL_SIZE_Y, local_size_z = 
 // ------------------------------------------------------------------
 
 layout(binding = 0, rgba16f) uniform writeonly image3D i_VoxelGrid;
-
-// ------------------------------------------------------------------
-// SHARED -----------------------------------------------------------
-// ------------------------------------------------------------------
-
-shared vec4 g_cached_scattering[VOXEL_GRID_SIZE_Z];
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
@@ -60,24 +54,22 @@ void write_final_scattering(ivec3 coord, vec4 value)
 
 void main()
 {
-    ivec3 coord = ivec3(gl_WorkGroupID.x, gl_WorkGroupID.y, gl_LocalInvocationIndex);
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xy, 0);
 
-    // Populate cache
-    g_cached_scattering[gl_LocalInvocationIndex] = texelFetch(s_VoxelGrid, coord, 0);
-
-    barrier();
+    vec4 current_slice = texelFetch(s_VoxelGrid, coord, 0);
+    write_final_scattering(coord, current_slice);
 
     // Accumulate scattering
-    if (gl_LocalInvocationIndex == 0)
+    for (int i = 1; i < VOXEL_GRID_SIZE_Z; i++)
     {
-        for (int i = 1; i < VOXEL_GRID_SIZE_Z; i++)
-            g_cached_scattering[i] = accumulate_scattering(g_cached_scattering[i - 1], g_cached_scattering[i]);
+        coord.z = i;
+
+        vec4 next_slice = texelFetch(s_VoxelGrid, coord, 0);
+
+        current_slice = accumulate_scattering(current_slice, next_slice);
+
+        write_final_scattering(coord, current_slice);
     }
-
-    barrier();
-
-    // Write out final scattering.
-    write_final_scattering(coord, g_cached_scattering[gl_LocalInvocationIndex]);
 }
 
 // ------------------------------------------------------------------
