@@ -26,17 +26,51 @@ layout(binding = 0, rgba16f) uniform writeonly image3D i_VoxelGrid;
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
+layout(std140, binding = 0) uniform Uniforms
+{
+    mat4  view;
+    mat4  projection;
+    mat4  view_proj;
+    mat4  prev_view_proj;
+    mat4  light_view_proj;
+    mat4  inv_view_proj;
+    vec4  light_direction;
+    vec4  light_color;
+    vec4  camera_position;
+    vec4  bias_near_far_pow;
+    vec4  aniso_density_scattering_absorption;
+    vec4  time;
+    ivec4 width_height;
+};
+
 uniform sampler3D s_VoxelGrid;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-// https://github.com/Unity-Technologies/VolumetricLighting/blob/master/Assets/VolumetricFog/Shaders/Scatter.compute
-vec4 accumulate(vec3 accum_scattering, float accum_transmittance, vec3 slice_scattering, float slice_density)
+float slice_distance(int z)
 {
-    const float slice_transmittance = exp(-slice_density / VOXEL_GRID_SIZE_Z);
-    //const float slice_transmittance = exp(-slice_density);
+    float n = bias_near_far_pow.y;
+    float f = bias_near_far_pow.z;
+
+    return n * pow(f / n, (float(z) + 0.5f) / float(VOXEL_GRID_SIZE_Z));
+}
+
+// ------------------------------------------------------------------
+
+float slice_thickness(int z)
+{
+    return abs(slice_distance(z + 1) - slice_distance(z));
+}
+
+// ------------------------------------------------------------------
+
+// https://github.com/Unity-Technologies/VolumetricLighting/blob/master/Assets/VolumetricFog/Shaders/Scatter.compute
+vec4 accumulate(int z, vec3 accum_scattering, float accum_transmittance, vec3 slice_scattering, float slice_density)
+{
+    const float thickness = slice_thickness(z);
+    const float slice_transmittance = exp(-slice_density * thickness * 0.01f);
 
     vec3 slice_scattering_integral = slice_scattering * (1.0 - slice_transmittance) / slice_density;
 
@@ -61,7 +95,8 @@ void main()
 
         vec4 slice_scattering_density = texelFetch(s_VoxelGrid, coord, 0);
 
-        accum_scattering_transmittance = accumulate(accum_scattering_transmittance.rgb, 
+        accum_scattering_transmittance = accumulate(z,
+                                                    accum_scattering_transmittance.rgb, 
                                                     accum_scattering_transmittance.a,
                                                     slice_scattering_density.rgb,
                                                     slice_scattering_density.a);

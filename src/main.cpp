@@ -115,7 +115,7 @@ protected:
     void debug_gui()
     {
         ImGui::SliderFloat("Anisotropy", &m_anisotropy, 0.0f, 1.0f);
-        ImGui::SliderFloat("Density", &m_density, 0.1f, 200.0f);
+        ImGui::SliderFloat("Density", &m_density, 0.1f, 10.0f);
         ImGui::Checkbox("Temporal Accumulation", &m_temporal_accumulation);
         ImGui::Checkbox("Tricubic Filtering", &m_tricubic_filtering);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
@@ -374,7 +374,7 @@ private:
 
     void create_camera()
     {
-        m_main_camera = std::make_unique<dw::Camera>(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(88.0647964f, 55.8836021f, 53.5865288f), glm::vec3(-1.0f, 0.0, 0.0f));
+        m_main_camera = std::make_unique<dw::Camera>(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(91.3629837f, 56.2090416f, 55.6918716f), glm::vec3(-1.0f, 0.0, 0.0f));
         m_main_camera->set_rotatation_delta(glm::vec3(0.0f, -45.0f, 0.0f));
         m_main_camera->update();
     }
@@ -544,6 +544,8 @@ private:
     {
         DW_SCOPED_SAMPLE("Volumetric Ray March");
 
+        m_ubo->bind_base(0);
+
         m_ray_march_program->use();
 
         m_ray_march_voxel_grid->bind_image(0, 0, 0, GL_WRITE_ONLY, m_ray_march_voxel_grid->internal_format());
@@ -639,7 +641,7 @@ private:
     float     m_light_intensity         = 50.0f;
     float     m_ambient_light_intensity = 0.0001f;
     float     m_sun_angle               = 0.0f;
-    float     m_bias                    = 0.001f;
+    float     m_bias                    = 0.002f;
 
     // Camera controls.
     bool  m_mouse_look         = false;

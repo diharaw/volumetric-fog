@@ -1,10 +1,10 @@
 [![License: MIT](https://img.shields.io/packagist/l/doctrine/orm.svg)](https://opensource.org/licenses/MIT)
 
 # Volumetric Lighting
-An OpenGL sample that demonstrates baking Signed Distance Fields (SDF) into 3D textures using compute shaders and using them to add Soft Shadows and Ambient Occlusion to a rasterized scene.
+An OpenGL sample that demonstrates Volumetric Lighting using a frustum-aligned voxel grid and compute shaders.
 
 ## Screenshots
-![VolumetricLighting](data/screenshot_1.jpg)
+![VolumetricLighting](data/screenshot.jpg)
 
 ## Building
 
@@ -25,6 +25,10 @@ cmake -G "Visual Studio 16 2019" ..
 
 ## Dependencies
 * [dwSampleFramework](https://github.com/diharaw/dwSampleFramework) 
+
+## References
+* [Volumetric fog: Unified, compute shader based solution to atmospheric scattering](https://bartwronski.files.wordpress.com/2014/08/bwronski_volumetric_fog_siggraph2014.pdf) 
+* [Physically-based & Unified Volumetric Rendering in Frostbite](https://www.ea.com/frostbite/news/physically-based-unified-volumetric-rendering-in-frostbite)
 
 ## License
 ```
