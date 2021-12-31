@@ -3,8 +3,20 @@
 # Volumetric Lighting
 An OpenGL sample that demonstrates Volumetric Lighting using a frustum-aligned voxel grid and compute shaders.
 
-## Screenshots
 ![VolumetricLighting](data/screenshot.jpg)
+
+## Usage
+
+1. Download the latest release [here](https://github.com/diharaw/VolumetricLighting/releases/download/1.0.0/VolumetricLighting_1.0.0.zip).
+2. Extract archive contents.
+3. Run VolumetricLighting.exe.
+
+### Controls
+
+* `W`/`A`/`S`/`D` - camera movement.
+* `RMB` - hold to look around.
+* `G` - toggle UI.
+* `ESC` - close application.
 
 ## Building
 
@@ -22,6 +34,7 @@ mkdir build
 cd build
 cmake -G "Visual Studio 16 2019" ..
 ```
+Note: To obtain the assets please download the release and copy the *meshes* and *textures* into the folder containing the built executable.
 
 ## Dependencies
 * [dwSampleFramework](https://github.com/diharaw/dwSampleFramework) 

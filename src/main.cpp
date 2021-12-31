@@ -220,14 +220,14 @@ private:
     bool create_shaders()
     {
         // Create general shaders
-        m_mesh_vs            = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
-        m_mesh_fs            = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
-        m_skybox_vs          = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
-        m_skybox_fs          = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
-        m_shadow_map_vs      = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
-        m_shadow_map_fs      = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
-        m_light_injection_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/light_injection_cs.glsl");
-        m_ray_march_cs       = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/ray_march_cs.glsl");
+        m_mesh_vs            = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shaders/mesh_vs.glsl");
+        m_mesh_fs            = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shaders/mesh_fs.glsl");
+        m_skybox_vs          = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shaders/skybox_vs.glsl");
+        m_skybox_fs          = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shaders/skybox_fs.glsl");
+        m_shadow_map_vs      = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shaders/shadow_map_vs.glsl");
+        m_shadow_map_fs      = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shaders/shadow_map_fs.glsl");
+        m_light_injection_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shaders/light_injection_cs.glsl");
+        m_ray_march_cs       = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shaders/ray_march_cs.glsl");
 
         if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_light_injection_cs || !m_ray_march_cs)
         {
@@ -311,7 +311,7 @@ private:
 
         for (int i = 0; i < NUM_BLUE_NOISE_TEXTURES; i++)
         {
-            auto texture = dw::gl::Texture2D::create_from_file("texture/blue_noise/LDR_LLL1_" + std::to_string(i) + ".png");
+            auto texture = dw::gl::Texture2D::create_from_file("textures/blue_noise/LDR_LLL1_" + std::to_string(i) + ".png");
 
             texture->set_min_filter(GL_NEAREST);
             texture->set_mag_filter(GL_NEAREST);
@@ -357,7 +357,7 @@ private:
 
     bool load_scene()
     {
-        m_mesh = dw::Mesh::load("mesh/sponza.obj");
+        m_mesh = dw::Mesh::load("meshes/sponza.obj");
 
         if (!m_mesh)
         {
