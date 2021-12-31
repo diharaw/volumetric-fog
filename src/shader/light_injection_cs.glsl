@@ -1,5 +1,4 @@
 #include <common.glsl>
-#include <simplex_noise.glsl>
 
 // ------------------------------------------------------------------
 // DEFINES ----------------------------------------------------------
@@ -128,7 +127,7 @@ void main()
 
         // Density and coefficient estimation.
         float thickness  = z_slice_thickness(coord.z);
-        float density    = aniso_density_scattering_absorption.y + simplex3d(world_pos + vec3(time.x * 20.0f, 0.0f, 0.0f));
+        float density    = aniso_density_scattering_absorption.y;
         
         // Perform lighting.
         vec3 lighting = light_color.rgb * light_color.a;

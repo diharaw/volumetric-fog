@@ -52,6 +52,8 @@ uniform sampler2DShadow s_ShadowMap;
 uniform sampler3D       s_VoxelGrid;
 uniform sampler2D       s_BlueNoise;
 
+uniform bool u_Tricubic;
+
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
@@ -247,7 +249,7 @@ vec3 add_inscattered_light(vec3 color, vec3 world_pos)
 {
     vec3 uv = world_to_uv(world_pos, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, view_proj);
 
-    vec4  scattered_light = textureLod(s_VoxelGrid, uv, 0.0f);
+    vec4  scattered_light = u_Tricubic ? textureTricubic(s_VoxelGrid, uv) : textureLod(s_VoxelGrid, uv, 0.0f);
     float transmittance   = scattered_light.a;
 
     return color * transmittance + scattered_light.rgb;

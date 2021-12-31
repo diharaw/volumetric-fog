@@ -117,6 +117,7 @@ protected:
         ImGui::SliderFloat("Anisotropy", &m_anisotropy, 0.0f, 1.0f);
         ImGui::SliderFloat("Density", &m_density, 0.1f, 200.0f);
         ImGui::Checkbox("Temporal Accumulation", &m_temporal_accumulation);
+        ImGui::Checkbox("Tricubic Filtering", &m_tricubic_filtering);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
         ImGui::InputFloat("Bias", &m_bias);
         ImGui::InputFloat("Light Intensity", &m_light_intensity);
@@ -373,7 +374,8 @@ private:
 
     void create_camera()
     {
-        m_main_camera = std::make_unique<dw::Camera>(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 3.0f, 15.0f), glm::vec3(-1.0f, 0.0, 0.0f));
+        m_main_camera = std::make_unique<dw::Camera>(60.0f, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(88.0647964f, 55.8836021f, 53.5865288f), glm::vec3(-1.0f, 0.0, 0.0f));
+        m_main_camera->set_rotatation_delta(glm::vec3(0.0f, -45.0f, 0.0f));
         m_main_camera->update();
     }
 
@@ -490,6 +492,8 @@ private:
 
         if (m_mesh_program->set_uniform("s_BlueNoise", 6))
             m_blue_noise_textures[m_temporal_accumulation ? m_frame_idx % NUM_BLUE_NOISE_TEXTURES : 0]->bind(6);
+
+        m_mesh_program->set_uniform("u_Tricubic", m_tricubic_filtering);
 
         // Draw scene.
         render_mesh(m_mesh, m_mesh_program, m_main_camera->m_projection, m_main_camera->m_view, m_transform);
@@ -623,16 +627,17 @@ private:
 
     // Volumetrics
     float m_anisotropy            = 0.7f;
-    float m_density               = 35.0f;
+    float m_density               = 5.0f;
     int   m_frame_idx             = 0;
     bool  m_ping_pong             = false;
     bool  m_temporal_accumulation = true;
+    bool  m_tricubic_filtering    = true;
 
     // Light
     glm::vec3 m_light_direction;
     glm::vec3 m_light_color             = glm::vec3(1.0f);
-    float     m_light_intensity         = 10.0f;
-    float     m_ambient_light_intensity = 0.001f;
+    float     m_light_intensity         = 50.0f;
+    float     m_ambient_light_intensity = 0.0001f;
     float     m_sun_angle               = 0.0f;
     float     m_bias                    = 0.001f;
 
