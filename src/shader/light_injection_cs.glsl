@@ -1,4 +1,5 @@
 #include <common.glsl>
+#include <simplex_noise.glsl>
 
 // ------------------------------------------------------------------
 // DEFINES ----------------------------------------------------------
@@ -39,11 +40,15 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  camera_position;
     vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
+    vec4  time;
     ivec4 width_height;
 };
 
-uniform sampler2D s_ShadowMap;
+uniform sampler2DShadow s_ShadowMap;
 uniform sampler2D s_BlueNoise;
+uniform sampler3D s_History;
+
+uniform bool u_Accumulation;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -51,13 +56,10 @@ uniform sampler2D s_BlueNoise;
 
 float sample_shadow_map(vec2 coord, float z)
 {
-    // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closest_depth = texture(s_ShadowMap, coord).r;
-    // get depth of current fragment from light's perspective
     float current_depth = z;
-    // check whether current frag pos is in shadow
     float bias = bias_near_far_pow.x;
-    return current_depth - bias > closest_depth ? 1.0 : 0.0;
+
+    return texture(s_ShadowMap, vec3(coord, current_depth - bias));
 }
 
 // ------------------------------------------------------------------
@@ -76,7 +78,7 @@ float visibility(vec3 p)
     if (any(greaterThan(proj_coords.xy, vec2(1.0f))) || any(lessThan(proj_coords.xy, vec2(0.0f))))
         return 1.0f;
 
-    return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
+    return sample_shadow_map(proj_coords.xy, proj_coords.z);
 }
 
 // ------------------------------------------------------------------
@@ -125,11 +127,9 @@ void main()
         vec3 Wo = normalize(camera_position.xyz - world_pos);
 
         // Density and coefficient estimation.
-        float density    = aniso_density_scattering_absorption.y; // TODO: Add noise
         float thickness  = z_slice_thickness(coord.z);
-        float absorption = aniso_density_scattering_absorption.z * density * thickness;
-        float scattering = aniso_density_scattering_absorption.w * density * thickness;
-
+        float density    = aniso_density_scattering_absorption.y + simplex3d(world_pos + vec3(time.x * 20.0f, 0.0f, 0.0f));
+        
         // Perform lighting.
         vec3 lighting = light_color.rgb * light_color.a;
 
@@ -138,11 +138,29 @@ void main()
         if (visibility_value > EPSILON)
             lighting += visibility_value * light_color.xyz * phase_function(Wo, -light_direction.xyz, aniso_density_scattering_absorption.x);
 
-        // RGB = Amount of in-scattered light, A = Extinction coefficient.
-        vec4 color_and_coef = vec4(lighting * scattering, absorption + scattering);
+        // RGB = Amount of in-scattered light, A = Density.
+        vec4 color_and_density = vec4(lighting * density, density);
+
+        // Temporal accumulation
+        if (u_Accumulation)
+        { 
+            vec3 world_pos_without_jitter = id_to_world(coord, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, inv_view_proj);                
+
+            // Find the history UV
+            vec3 history_uv = world_to_uv(world_pos_without_jitter, bias_near_far_pow.y, bias_near_far_pow.z, bias_near_far_pow.w, prev_view_proj);
+
+            // If history UV is outside the frustum, skip history
+            if (all(greaterThanEqual(history_uv, vec3(0.0f))) && all(lessThanEqual(history_uv, vec3(1.0f))))
+            {
+                // Fetch history sample
+                vec4 history = textureLod(s_History, history_uv, 0.0f);
+
+                color_and_density = mix(history, color_and_density, 0.05f);
+            }
+        }
 
         // Write out lighting.
-        imageStore(i_VoxelGrid, coord, color_and_coef);
+        imageStore(i_VoxelGrid, coord, color_and_density);
     }
 }
 

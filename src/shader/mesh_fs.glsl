@@ -40,34 +40,35 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  camera_position;
     vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
+    vec4  time;
     ivec4 width_height;
 };
 
-uniform sampler2D s_Albedo;
-uniform sampler2D s_Normal;
-uniform sampler2D s_Metallic;
-uniform sampler2D s_Roughness;
-uniform sampler2D s_ShadowMap;
-uniform sampler3D s_VoxelGrid;
-uniform sampler2D s_BlueNoise;
+uniform sampler2D       s_Albedo;
+uniform sampler2D       s_Normal;
+uniform sampler2D       s_Metallic;
+uniform sampler2D       s_Roughness;
+uniform sampler2DShadow s_ShadowMap;
+uniform sampler3D       s_VoxelGrid;
+uniform sampler2D       s_BlueNoise;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-float sample_shadow_map(vec2 coord, float z)
+float sample_shadow_map(vec2 coord, float u, float v, float z, float inv_shadow_map_size)
 {
-    // get closest depth value from light's perspective (using [0,1] range fragPosLight as coords)
-    float closest_depth = texture(s_ShadowMap, coord).r;
-    // get depth of current fragment from light's perspective
+    vec2 uv = coord + vec2(u, v) * inv_shadow_map_size;
+
     float current_depth = z;
-    // check whether current frag pos is in shadow
-    float bias = bias_near_far_pow.x;
-    return current_depth - bias > closest_depth ? 1.0 : 0.0;
+    float bias          = bias_near_far_pow.x;
+
+    return texture(s_ShadowMap, vec3(uv, current_depth - bias));
 }
 
 // ------------------------------------------------------------------
 
+// http://the-witness.net/news/2013/09/shadow-mapping-summary-part-1/
 float visibility(vec3 p)
 {
     // Transform frag position into Light-space.
@@ -82,7 +83,64 @@ float visibility(vec3 p)
     if (any(greaterThan(proj_coords.xy, vec2(1.0f))) || any(lessThan(proj_coords.xy, vec2(0.0f))))
         return 1.0f;
 
-    return 1.0 - sample_shadow_map(proj_coords.xy, proj_coords.z);
+    const float shadow_map_size     = 2048;
+    const float inv_shadow_map_size = 1.0f / shadow_map_size;
+
+    vec2 uv = proj_coords.xy * shadow_map_size; // 1 unit - 1 texel
+
+    vec2 base_uv;
+    base_uv.x = floor(uv.x + 0.5);
+    base_uv.y = floor(uv.y + 0.5);
+
+    float s = (uv.x + 0.5 - base_uv.x);
+    float t = (uv.y + 0.5 - base_uv.y);
+
+    base_uv -= vec2(0.5, 0.5);
+    base_uv *= inv_shadow_map_size;
+
+    float uw0 = (5 * s - 6);
+    float uw1 = (11 * s - 28);
+    float uw2 = -(11 * s + 17);
+    float uw3 = -(5 * s + 1);
+
+    float u0 = (4 * s - 5) / uw0 - 3;
+    float u1 = (4 * s - 16) / uw1 - 1;
+    float u2 = -(7 * s + 5) / uw2 + 1;
+    float u3 = -s / uw3 + 3;
+
+    float vw0 = (5 * t - 6);
+    float vw1 = (11 * t - 28);
+    float vw2 = -(11 * t + 17);
+    float vw3 = -(5 * t + 1);
+
+    float v0 = (4 * t - 5) / vw0 - 3;
+    float v1 = (4 * t - 16) / vw1 - 1;
+    float v2 = -(7 * t + 5) / vw2 + 1;
+    float v3 = -t / vw3 + 3;
+
+    float sum = 0.0f;
+
+    sum += uw0 * vw0 * sample_shadow_map(base_uv, u0, v0, proj_coords.z, inv_shadow_map_size);
+    sum += uw1 * vw0 * sample_shadow_map(base_uv, u1, v0, proj_coords.z, inv_shadow_map_size);
+    sum += uw2 * vw0 * sample_shadow_map(base_uv, u2, v0, proj_coords.z, inv_shadow_map_size);
+    sum += uw3 * vw0 * sample_shadow_map(base_uv, u3, v0, proj_coords.z, inv_shadow_map_size);
+
+    sum += uw0 * vw1 * sample_shadow_map(base_uv, u0, v1, proj_coords.z, inv_shadow_map_size);
+    sum += uw1 * vw1 * sample_shadow_map(base_uv, u1, v1, proj_coords.z, inv_shadow_map_size);
+    sum += uw2 * vw1 * sample_shadow_map(base_uv, u2, v1, proj_coords.z, inv_shadow_map_size);
+    sum += uw3 * vw1 * sample_shadow_map(base_uv, u3, v1, proj_coords.z, inv_shadow_map_size);
+
+    sum += uw0 * vw2 * sample_shadow_map(base_uv, u0, v2, proj_coords.z, inv_shadow_map_size);
+    sum += uw1 * vw2 * sample_shadow_map(base_uv, u1, v2, proj_coords.z, inv_shadow_map_size);
+    sum += uw2 * vw2 * sample_shadow_map(base_uv, u2, v2, proj_coords.z, inv_shadow_map_size);
+    sum += uw3 * vw2 * sample_shadow_map(base_uv, u3, v2, proj_coords.z, inv_shadow_map_size);
+
+    sum += uw0 * vw3 * sample_shadow_map(base_uv, u0, v3, proj_coords.z, inv_shadow_map_size);
+    sum += uw1 * vw3 * sample_shadow_map(base_uv, u1, v3, proj_coords.z, inv_shadow_map_size);
+    sum += uw2 * vw3 * sample_shadow_map(base_uv, u2, v3, proj_coords.z, inv_shadow_map_size);
+    sum += uw3 * vw3 * sample_shadow_map(base_uv, u3, v3, proj_coords.z, inv_shadow_map_size);
+
+    return sum * 1.0f / 2704;
 }
 
 // ------------------------------------------------------------------

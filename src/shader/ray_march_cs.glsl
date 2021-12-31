@@ -32,20 +32,18 @@ uniform sampler3D s_VoxelGrid;
 // FUNCTIONS --------------------------------------------------------
 // ------------------------------------------------------------------
 
-vec4 accumulate_scattering(vec4 front, vec4 back)
+// https://github.com/Unity-Technologies/VolumetricLighting/blob/master/Assets/VolumetricFog/Shaders/Scatter.compute
+vec4 accumulate(vec3 accum_scattering, float accum_transmittance, vec3 slice_scattering, float slice_density)
 {
-    // Accumulate the incoming light by attenuating it using the transmittance.
-    vec3 light = front.rgb + clamp(exp(-front.a), 0.0f, 1.0f) * back.rgb;
+    const float slice_transmittance = exp(-slice_density / VOXEL_GRID_SIZE_Z);
+    //const float slice_transmittance = exp(-slice_density);
 
-    return vec4(light, front.a + back.a);
-}
+    vec3 slice_scattering_integral = slice_scattering * (1.0 - slice_transmittance) / slice_density;
 
-// ------------------------------------------------------------------
+    accum_scattering += slice_scattering_integral * accum_transmittance;
+    accum_transmittance *= slice_transmittance;
 
-void write_final_scattering(ivec3 coord, vec4 value)
-{
-    float transmittance = exp(-value.a);
-    imageStore(i_VoxelGrid, coord, vec4(value.rgb, transmittance));
+    return vec4(accum_scattering, accum_transmittance);
 }
 
 // ------------------------------------------------------------------
@@ -54,21 +52,21 @@ void write_final_scattering(ivec3 coord, vec4 value)
 
 void main()
 {
-    ivec3 coord = ivec3(gl_GlobalInvocationID.xy, 0);
-
-    vec4 current_slice = texelFetch(s_VoxelGrid, coord, 0);
-    write_final_scattering(coord, current_slice);
+    vec4 accum_scattering_transmittance = vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
     // Accumulate scattering
-    for (int i = 1; i < VOXEL_GRID_SIZE_Z; i++)
+    for (int z = 0; z < VOXEL_GRID_SIZE_Z; z++)
     {
-        coord.z = i;
+        ivec3 coord = ivec3(gl_GlobalInvocationID.xy, z);
 
-        vec4 next_slice = texelFetch(s_VoxelGrid, coord, 0);
+        vec4 slice_scattering_density = texelFetch(s_VoxelGrid, coord, 0);
 
-        current_slice = accumulate_scattering(current_slice, next_slice);
+        accum_scattering_transmittance = accumulate(accum_scattering_transmittance.rgb, 
+                                                    accum_scattering_transmittance.a,
+                                                    slice_scattering_density.rgb,
+                                                    slice_scattering_density.a);
 
-        write_final_scattering(coord, current_slice);
+        imageStore(i_VoxelGrid, coord, accum_scattering_transmittance);
     }
 }
 

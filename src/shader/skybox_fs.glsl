@@ -33,6 +33,7 @@ layout(std140, binding = 0) uniform Uniforms
     vec4  camera_position;
     vec4  bias_near_far_pow;
     vec4  aniso_density_scattering_absorption;
+    vec4  time;
     ivec4 width_height;
 };
 
@@ -59,11 +60,13 @@ void main()
 {
     vec3 env_color = texture(s_Cubemap, FS_IN_WorldPos).rgb;
 
+    env_color = add_inscattered_light(env_color);
+
     // HDR tonemap and gamma correct
     env_color = env_color / (env_color + vec3(1.0));
     env_color = pow(env_color, vec3(1.0 / 2.2));
 
-    FS_OUT_Color = add_inscattered_light(env_color);
+    FS_OUT_Color = env_color;
 }
 
 // ------------------------------------------------------------------

@@ -35,6 +35,7 @@ struct UBO
     glm::vec4  camera_position;
     glm::vec4  bias_near_far_pow;
     glm::vec4  aniso_density_scattering_absorption;
+    glm::vec4  time;
     glm::ivec4 width_height;
 };
 
@@ -52,6 +53,8 @@ protected:
         m_shadow_map->set_near_plane(1.0f);
         m_shadow_map->set_far_plane(370.0f);
         m_shadow_map->set_backoff_distance(200.0f);
+        m_shadow_map->texture()->set_compare_mode(GL_COMPARE_REF_TO_TEXTURE);
+        m_shadow_map->texture()->set_compare_func(GL_LESS);
 
         m_sun_angle = glm::radians(-58.0f);
 
@@ -96,8 +99,6 @@ protected:
 
         volumetric_light_injection();
 
-        volumetric_temporal_integration();
-
         volumetric_ray_march();
 
         render_main_camera();
@@ -114,10 +115,7 @@ protected:
     void debug_gui()
     {
         ImGui::SliderFloat("Anisotropy", &m_anisotropy, 0.0f, 1.0f);
-        ImGui::SliderFloat("Density", &m_density, 0.0f, 1.0f);
-        ImGui::SliderFloat("Scattering Coefficient", &m_scattering_coefficient, 0.0f, 1.0f);
-        ImGui::SliderFloat("Absorption Coefficient", &m_absorption_coefficient, 0.0f, 1.0f);
-        ImGui::SliderFloat("Depth Power", &m_depth_power, 1.0f, 10.0f);
+        ImGui::SliderFloat("Density", &m_density, 0.1f, 200.0f);
         ImGui::Checkbox("Temporal Accumulation", &m_temporal_accumulation);
         ImGui::SliderAngle("Sun Angle", &m_sun_angle, 0.0f, -180.0f);
         ImGui::InputFloat("Bias", &m_bias);
@@ -221,17 +219,16 @@ private:
     bool create_shaders()
     {
         // Create general shaders
-        m_mesh_vs                 = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
-        m_mesh_fs                 = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
-        m_skybox_vs               = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
-        m_skybox_fs               = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
-        m_shadow_map_vs           = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
-        m_shadow_map_fs           = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
-        m_light_injection_cs      = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/light_injection_cs.glsl");
-        m_ray_march_cs            = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/ray_march_cs.glsl");
-        m_temporal_integration_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/temporal_integration_cs.glsl");
+        m_mesh_vs            = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl");
+        m_mesh_fs            = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl");
+        m_skybox_vs          = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/skybox_vs.glsl");
+        m_skybox_fs          = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/skybox_fs.glsl");
+        m_shadow_map_vs      = dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/shadow_map_vs.glsl");
+        m_shadow_map_fs      = dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/shadow_map_fs.glsl");
+        m_light_injection_cs = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/light_injection_cs.glsl");
+        m_ray_march_cs       = dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/ray_march_cs.glsl");
 
-        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_light_injection_cs || !m_ray_march_cs || !m_temporal_integration_cs)
+        if (!m_mesh_vs || !m_mesh_fs || !m_skybox_vs || !m_skybox_fs || !m_shadow_map_vs || !m_shadow_map_fs || !m_light_injection_cs || !m_ray_march_cs)
         {
             DW_LOG_FATAL("Failed to create Shaders");
             return false;
@@ -282,15 +279,6 @@ private:
             return false;
         }
 
-        // Create temporal accumulation shader program
-        m_temporal_integration_program = dw::gl::Program::create({ m_temporal_integration_cs });
-
-        if (!m_temporal_integration_program)
-        {
-            DW_LOG_FATAL("Failed to create Shader Program");
-            return false;
-        }
-
         return true;
     }
 
@@ -298,12 +286,7 @@ private:
 
     void create_textures()
     {
-        m_light_injection_voxel_grid = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
-        m_ray_march_voxel_grid       = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
-
-        m_light_injection_voxel_grid->set_min_filter(GL_LINEAR);
-        m_light_injection_voxel_grid->set_mag_filter(GL_LINEAR);
-        m_light_injection_voxel_grid->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+        m_ray_march_voxel_grid = dw::gl::Texture3D::create(VOXEL_GRID_SIZE_X, VOXEL_GRID_SIZE_Y, VOXEL_GRID_SIZE_Z, 1, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT);
 
         m_ray_march_voxel_grid->set_min_filter(GL_LINEAR);
         m_ray_march_voxel_grid->set_mag_filter(GL_LINEAR);
@@ -359,8 +342,9 @@ private:
         ubo->light_direction                     = glm::vec4(m_light_direction, 0.0f);
         ubo->light_color                         = glm::vec4(m_light_color * m_light_intensity, m_ambient_light_intensity);
         ubo->camera_position                     = glm::vec4(m_main_camera->m_position, 0.0f);
-        ubo->bias_near_far_pow                   = glm::vec4(m_bias, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, m_depth_power);
-        ubo->aniso_density_scattering_absorption = glm::vec4(m_anisotropy, m_density, m_scattering_coefficient, m_absorption_coefficient);
+        ubo->bias_near_far_pow                   = glm::vec4(m_bias, CAMERA_NEAR_PLANE, CAMERA_FAR_PLANE, 1.0f);
+        ubo->aniso_density_scattering_absorption = glm::vec4(m_anisotropy, m_density, 0.0f, 0.0f);
+        ubo->time                                = glm::vec4(static_cast<float>(glfwGetTime()), 0.0f, 0.0f, 0.0f);
         ubo->width_height                        = glm::ivec4(m_width, m_height, m_frame_idx, 0);
 
         m_ubo->unmap();
@@ -521,7 +505,10 @@ private:
 
         m_light_injection_program->use();
 
-        m_light_injection_voxel_grid->bind_image(0, 0, 0, GL_WRITE_ONLY, m_light_injection_voxel_grid->internal_format());
+        uint32_t read_idx  = static_cast<uint32_t>(m_ping_pong);
+        uint32_t write_idx = static_cast<uint32_t>(!m_ping_pong);
+
+        m_temporal_integration_voxel_grid[write_idx]->bind_image(0, 0, 0, GL_WRITE_ONLY, m_temporal_integration_voxel_grid[write_idx]->internal_format());
 
         if (m_light_injection_program->set_uniform("s_ShadowMap", 0))
             m_shadow_map->texture()->bind(0);
@@ -529,39 +516,10 @@ private:
         if (m_light_injection_program->set_uniform("s_BlueNoise", 1))
             m_blue_noise_textures[m_temporal_accumulation ? m_frame_idx % NUM_BLUE_NOISE_TEXTURES : 0]->bind(1);
 
-        const uint32_t LOCAL_SIZE_X = 8;
-        const uint32_t LOCAL_SIZE_Y = 8;
-        const uint32_t LOCAL_SIZE_Z = 1;
+        if (m_light_injection_program->set_uniform("s_History", 2))
+            m_temporal_integration_voxel_grid[read_idx]->bind(2);
 
-        uint32_t size_x = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_X) / float(LOCAL_SIZE_X)));
-        uint32_t size_y = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Y) / float(LOCAL_SIZE_Y)));
-        uint32_t size_z = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Z) / float(LOCAL_SIZE_Z)));
-
-        glDispatchCompute(size_x, size_y, size_z);
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------------------------
-
-    void volumetric_temporal_integration()
-    {
-        DW_SCOPED_SAMPLE("Volumetric Temporal Integration");
-
-        m_ubo->bind_base(0);
-
-        m_temporal_integration_program->use();
-
-        uint32_t read_idx  = static_cast<uint32_t>(m_ping_pong);
-        uint32_t write_idx = static_cast<uint32_t>(!m_ping_pong);
-
-        m_temporal_integration_voxel_grid[write_idx]->bind_image(0, 0, 0, GL_WRITE_ONLY, m_temporal_integration_voxel_grid[write_idx]->internal_format());
-
-        if (m_temporal_integration_program->set_uniform("s_Current", 0))
-            m_light_injection_voxel_grid->bind(0);
-
-        if (m_temporal_integration_program->set_uniform("s_History", 1))
-            m_temporal_integration_voxel_grid[read_idx]->bind(1);
-
-        m_temporal_integration_program->set_uniform("u_Accumulation", m_temporal_accumulation);
+        m_light_injection_program->set_uniform("u_Accumulation", m_frame_idx == 0 ? false : m_temporal_accumulation);
 
         const uint32_t LOCAL_SIZE_X = 8;
         const uint32_t LOCAL_SIZE_Y = 8;
@@ -597,7 +555,7 @@ private:
 
         uint32_t size_x = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_X) / float(LOCAL_SIZE_X)));
         uint32_t size_y = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Y) / float(LOCAL_SIZE_Y)));
-        uint32_t size_z = static_cast<uint32_t>(ceil(float(VOXEL_GRID_SIZE_Z) / float(LOCAL_SIZE_Z)));
+        uint32_t size_z = 1;
 
         glDispatchCompute(size_x, size_y, size_z);
     }
@@ -648,14 +606,11 @@ private:
     dw::gl::Shader::Ptr                      m_skybox_vs;
     dw::gl::Shader::Ptr                      m_ray_march_cs;
     dw::gl::Shader::Ptr                      m_light_injection_cs;
-    dw::gl::Shader::Ptr                      m_temporal_integration_cs;
     dw::gl::Program::Ptr                     m_shadow_map_program;
     dw::gl::Program::Ptr                     m_mesh_program;
     dw::gl::Program::Ptr                     m_skybox_program;
     dw::gl::Program::Ptr                     m_ray_march_program;
     dw::gl::Program::Ptr                     m_light_injection_program;
-    dw::gl::Program::Ptr                     m_temporal_integration_program;
-    dw::gl::Texture3D::Ptr                   m_light_injection_voxel_grid;
     dw::gl::Texture3D::Ptr                   m_ray_march_voxel_grid;
     dw::gl::Texture3D::Ptr                   m_temporal_integration_voxel_grid[2];
     dw::gl::Buffer::Ptr                      m_ubo;
@@ -667,14 +622,11 @@ private:
     glm::mat4                   m_prev_view_projection;
 
     // Volumetrics
-    float m_anisotropy             = 0.7f;
-    float m_density                = 0.13f;
-    float m_scattering_coefficient = 0.5f;
-    float m_absorption_coefficient = 0.5f;
-    float m_depth_power            = 1.0f;
-    int   m_frame_idx              = 0;
-    bool  m_ping_pong              = false;
-    bool  m_temporal_accumulation  = true;
+    float m_anisotropy            = 0.7f;
+    float m_density               = 35.0f;
+    int   m_frame_idx             = 0;
+    bool  m_ping_pong             = false;
+    bool  m_temporal_accumulation = true;
 
     // Light
     glm::vec3 m_light_direction;
