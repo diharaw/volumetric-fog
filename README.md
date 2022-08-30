@@ -1,9 +1,9 @@
 [![License: MIT](https://img.shields.io/packagist/l/doctrine/orm.svg)](https://opensource.org/licenses/MIT)
 
-# Volumetric Lighting
-An OpenGL sample that demonstrates Volumetric Lighting using a frustum-aligned voxel grid and compute shaders.
+# Volumetric Fog
+An OpenGL sample that demonstrates Volumetric Fog using a frustum-aligned voxel grid and compute shaders.
 
-![VolumetricLighting](data/screenshot.jpg)
+![VolumetricFog](data/screenshot.jpg)
 
 ## Usage
 
